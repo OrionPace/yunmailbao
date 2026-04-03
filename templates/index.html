@@ -1,0 +1,688 @@
+
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>智能邮件发送系统</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div class="container mt-4">
+        <h1 class="text-center mb-4">智能邮件发送系统</h1>
+        
+        <ul class="nav nav-tabs" id="myTab" role="tablist">
+            <li class="nav-item" role="presentation">
+                <button class="nav-link active" id="send-tab" data-bs-toggle="tab" data-bs-target="#send" type="button" role="tab">发送配置</button>
+            </li>
+            <li class="nav-item" role="presentation">
+                <button class="nav-link" id="marketing-tab" data-bs-toggle="tab" data-bs-target="#marketing" type="button" role="tab">营销增强</button>
+            </li>
+            <li class="nav-item" role="presentation">
+                <button class="nav-link" id="about-tab" data-bs-toggle="tab" data-bs-target="#about" type="button" role="tab">关于</button>
+            </li>
+        </ul>
+        
+        <div class="tab-content" id="myTabContent">
+            <!-- 发送配置标签页 -->
+            <div class="tab-pane fade show active" id="send" role="tabpanel">
+                <form id="configForm" class="mt-3" action="/config" method="post">
+                    <div class="row">
+                        <div class="col-md-7">
+                            <!-- 邮件内容编辑区 -->
+                            <div class="card mb-3">
+                                <div class="card-header bg-primary text-white">邮件内容</div>
+                                <div class="card-body">
+                                    <div class="toolbar mb-2">
+                                        <button type="button" class="btn btn-sm btn-outline-primary" onclick="document.execCommand('bold')">B</button>
+                                        <button type="button" class="btn btn-sm btn-outline-primary" onclick="document.execCommand('italic')">I</button>
+                                        <button type="button" class="btn btn-sm btn-outline-primary" onclick="document.execCommand('underline')">U</button>
+                                        <button type="button" class="btn btn-sm btn-outline-primary" onclick="document.execCommand('insertOrderedList')">1.</button>
+                                        <button type="button" class="btn btn-sm btn-outline-primary" onclick="document.execCommand('insertUnorderedList')">•</button>
+                                        <button type="button" class="btn btn-sm btn-outline-primary" onclick="applyTemplate()">应用模板</button>
+                                    </div>
+                                    <div id="editor" class="form-control" contenteditable="true" style="height: 300px; overflow-y: auto;">{{ config.email_content|safe if config.email_content else default_content|safe }}</div>
+                                    <input type="hidden" name="email_content" id="emailContent">
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="col-md-5">
+                            <!-- 收件人配置 -->
+                            <div class="card mb-3">
+                                <div class="card-header bg-primary text-white">收件人配置</div>
+                                <div class="card-body">
+                                    <div class="mb-3">
+                                        <label class="form-label">收件人Excel:</label>
+                                        <div class="input-group">
+                                            <input type="text" class="form-control" name="excel_path" value="{{ config.excel_path }}">
+                                            <button type="button" class="btn btn-primary" onclick="uploadFile('excel')">浏览...</button>
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="mb-3">
+                                        <label class="form-label">邮件主题:</label>
+                                        <input type="text" class="form-control" name="subject" value="{{ config.subject if config.subject else '【广东省acee卫生研究院】R语言医学统计分析技术' }}">
+                                    </div>
+                                    
+                                    <div class="mb-3">
+                                        <label class="form-label">图片文件:</label>
+                                        <div class="input-group">
+                                            <input type="text" class="form-control" name="image_path" value="{{ config.image_path }}">
+                                            <button type="button" class="btn btn-primary" onclick="uploadFile('image')">浏览...</button>
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="mb-3">
+                                        <label class="form-label">PDF附件:</label>
+                                        <div class="input-group">
+                                            <input type="text" class="form-control" name="attachment_path" value="{{ config.attachment_path }}">
+                                            <button type="button" class="btn btn-primary" onclick="uploadFile('attachment')">浏览...</button>
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="mb-3">
+                                        <label class="form-label">日志文件:</label>
+                                        <input type="text" class="form-control" name="log_path" value="{{ config.log_path }}">
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <!-- 时间配置 -->
+                            <div class="card mb-3">
+                                <div class="card-header bg-primary text-white">发送时间配置</div>
+                                <div class="card-body">
+                                    <div class="row">
+                                        <div class="col-md-6 mb-3">
+                                            <label class="form-label">开始时间:</label>
+                                            <input type="time" class="form-control" name="start_time" value="{{ config.start_time if config.start_time else '00:00' }}">
+                                        </div>
+                                        <div class="col-md-6 mb-3">
+                                            <label class="form-label">结束时间:</label>
+                                            <input type="time" class="form-control" name="end_time" value="{{ config.end_time if config.end_time else '23:59' }}">
+                                        </div>
+                                    </div>
+                                    <div class="row">
+                                        <div class="col-md-6 mb-3">
+                                            <label class="form-label">最小间隔(秒):</label>
+                                            <input type="number" class="form-control" name="min_interval" min="1" max="3600" value="{{ config.min_interval if config.min_interval else 30 }}">
+                                        </div>
+                                        <div class="col-md-6 mb-3">
+                                            <label class="form-label">最大间隔(秒):</label>
+                                            <input type="number" class="form-control" name="max_interval" min="1" max="3600" value="{{ config.max_interval if config.max_interval else 60 }}">
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- 发件人配置 -->
+                    <div class="card mb-3">
+                        <div class="card-header bg-primary text-white">发件人配置</div>
+                        <div class="card-body">
+                            <div id="senderContainer">
+                                {% for sender in config.senders %}
+                                <div class="sender-row row mb-2">
+                                    <div class="col-md-3">
+                                        <input type="text" class="form-control" name="sender_email" placeholder="邮箱地址" value="{{ sender.email }}">
+                                    </div>
+                                    <div class="col-md-2">
+                                        <input type="password" class="form-control" name="sender_password" placeholder="密码/授权码" value="{{ sender.password }}">
+                                    </div>
+                                    <div class="col-md-2">
+                                        <input type="text" class="form-control" name="sender_name" placeholder="发件人名称" value="{{ sender.name }}">
+                                    </div>
+                                    <div class="col-md-2">
+                                        <input type="text" class="form-control" name="sender_smtp_server" placeholder="SMTP服务器" value="{{ sender.smtp_server }}">
+                                    </div>
+                                    <div class="col-md-2">
+                                        <input type="number" class="form-control" name="sender_smtp_port" placeholder="端口" value="{{ sender.smtp_port }}">
+                                    </div>
+                                    <div class="col-md-1">
+                                        <button type="button" class="btn btn-danger" onclick="removeSender(this)">删除</button>
+                                    </div>
+                                </div>
+                                {% else %}
+                                <div class="sender-row row mb-2">
+                                    <div class="col-md-3">
+                                        <input type="text" class="form-control" name="sender_email" placeholder="邮箱地址">
+                                    </div>
+                                    <div class="col-md-2">
+                                        <input type="password" class="form-control" name="sender_password" placeholder="密码/授权码">
+                                    </div>
+                                    <div class="col-md-2">
+                                        <input type="text" class="form-control" name="sender_name" placeholder="发件人名称" value="广东省acee卫生研究院">
+                                    </div>
+                                    <div class="col-md-2">
+                                        <input type="text" class="form-control" name="sender_smtp_server" placeholder="SMTP服务器">
+                                    </div>
+                                    <div class="col-md-2">
+                                        <input type="number" class="form-control" name="sender_smtp_port" placeholder="端口" value="587">
+                                    </div>
+                                    <div class="col-md-1">
+                                        <button type="button" class="btn btn-danger" onclick="removeSender(this)">删除</button>
+                                    </div>
+                                </div>
+                                {% endfor %}
+                            </div>
+                            <button type="button" class="btn btn-primary mt-2" onclick="addSender()">添加发件人</button>
+                        </div>
+                    </div>
+                    
+                    <!-- 发送控制 -->
+                    <div class="card mb-3">
+                        <div class="card-header bg-primary text-white">发送控制</div>
+                        <div class="card-body">
+                            <div class="progress mb-3">
+                                <div id="progressBar" class="progress-bar" role="progressbar" style="width: 0%" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100">0%</div>
+                            </div>
+                            
+                            <div class="d-flex justify-content-between mb-3">
+                                <button type="button" id="sendButton" class="btn btn-success" onclick="startSending()">开始发送</button>
+                                <button type="button" id="stopButton" class="btn btn-danger" onclick="stopSending()" disabled>停止发送</button>
+                                <button type="submit" class="btn btn-primary">保存配置</button>
+                                <button type="button" class="btn btn-secondary" onclick="window.location.reload()">重新加载</button>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- 日志显示 -->
+                    <div class="card mb-3">
+                        <div class="card-header bg-primary text-white">发送日志</div>
+                        <div class="card-body">
+                            <div id="logContainer" class="form-control" style="height: 200px; overflow-y: auto; font-family: monospace;"></div>
+                        </div>
+                    </div>
+                </form>
+            </div>
+            
+            <!-- 营销增强标签页 -->
+            <div class="tab-pane fade" id="marketing" role="tabpanel">
+                <div class="row mt-3">
+                    <div class="col-md-6">
+                        <!-- 智能发送优化 -->
+                        <div class="card mb-3">
+                            <div class="card-header bg-primary text-white">智能发送优化</div>
+                            <div class="card-body">
+                                <div class="form-check mb-3">
+                                    <input class="form-check-input" type="checkbox" id="enableTimeOpt" name="enable_time_opt" {{ 'checked' if config.marketing and config.marketing.enable_time_opt }}>
+                                    <label class="form-check-label" for="enableTimeOpt">启用智能发送时间</label>
+                                    <small class="form-text text-muted d-block">根据收件人邮箱类型自动选择最佳发送时间</small>
+                                </div>
+                                
+                                <div class="form-check mb-3">
+                                    <input class="form-check-input" type="checkbox" id="enableRotation" name="enable_rotation" {{ 'checked' if config.marketing and config.marketing.enable_rotation }}>
+                                    <label class="form-check-label" for="enableRotation">启用发件人轮换</label>
+                                    <small class="form-text text-muted d-block">自动轮换使用多个发件人账号，降低被标记为垃圾邮件的风险</small>
+                                </div>
+                                
+                                <div class="mb-3">
+                                    <label class="form-label">每日最大发送量:</label>
+                                    <input type="number" class="form-control" name="max_daily_emails" min="10" max="10000" value="{{ config.marketing.max_daily_emails if config.marketing and config.marketing.max_daily_emails else 500 }}">
+                                </div>
+                                
+                                <div class="form-check mb-3">
+                                    <input class="form-check-input" type="checkbox" id="enableIpWarmup" name="enable_ip_warmup" {{ 'checked' if config.marketing and config.marketing.enable_ip_warmup }}>
+                                    <label class="form-check-label" for="enableIpWarmup">启用IP预热模式</label>
+                                    <small class="form-text text-muted d-block">逐步增加发送量，提高邮件送达率</small>
+                                </div>
+                                
+                                <div class="mb-3">
+                                    <label class="form-label">预热天数:</label>
+                                    <input type="number" class="form-control" name="warmup_days" min="3" max="30" value="{{ config.marketing.warmup_days if config.marketing and config.marketing.warmup_days else 7 }}">
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- 内容优化 -->
+                        <div class="card mb-3">
+                            <div class="card-header bg-primary text-white">内容优化</div>
+                            <div class="card-body">
+                                <div class="form-check mb-3">
+                                    <input class="form-check-input" type="checkbox" id="enableContentCheck" name="enable_content_check" {{ 'checked' if config.marketing and config.marketing.enable_content_check }}>
+                                    <label class="form-check-label" for="enableContentCheck">启用内容智能检测</label>
+                                    <small class="form-text text-muted d-block">检测邮件内容中可能触发垃圾邮件过滤的关键词和模式</small>
+                                </div>
+                                
+                                <button type="button" class="btn btn-primary mb-3" onclick="checkEmailContent()">检测当前内容</button>
+                                
+                                <h5>邮件评分系统</h5>
+                                <div class="mb-2">
+                                    <label>主题评分:</label>
+                                    <div class="progress">
+                                        <div id="subjectScore" class="progress-bar" role="progressbar" style="width: 0%" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100">0%</div>
+                                    </div>
+                                </div>
+                                
+                                <div class="mb-2">
+                                    <label>内容评分:</label>
+                                    <div class="progress">
+                                        <div id="contentScore" class="progress-bar" role="progressbar" style="width: 0%" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100">0%</div>
+                                    </div>
+                                </div>
+                                
+                                <div class="mb-2">
+                                    <label>总体评分:</label>
+                                    <div class="progress">
+                                        <div id="totalScore" class="progress-bar" role="progressbar" style="width: 0%" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100">0%</div>
+                                        }
+                                    </script>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="col-md-6">
+                        <!-- A/B测试 -->
+                        <div class="card mb-3">
+                            <div class="card-header bg-primary text-white">A/B测试</div>
+                            <div class="card-body">
+                                <div class="form-check mb-3">
+                                    <input class="form-check-input" type="checkbox" id="enableAbTest" name="enable_ab_test" {{ 'checked' if config.marketing and config.marketing.enable_ab_test }}>
+                                    <label class="form-check-label" for="enableAbTest">启用A/B测试</label>
+                                    <small class="form-text text-muted d-block">使用两种不同的主题行，测试哪个效果更好</small>
+                                </div>
+                                
+                                <div class="mb-3">
+                                    <label class="form-label">主题A:</label>
+                                    <input type="text" class="form-control" name="subject_a" value="{{ config.marketing.subject_a if config.marketing and config.marketing.subject_a else '' }}">
+                                </div>
+                                
+                                <div class="mb-3">
+                                    <label class="form-label">主题B:</label>
+                                    <input type="text" class="form-control" name="subject_b" value="{{ config.marketing.subject_b if config.marketing and config.marketing.subject_b else '' }}">
+                                </div>
+                                
+                                <h5>测试结果分析</h5>
+                                <table class="table table-bordered">
+                                    <thead>
+                                        <tr>
+                                            <th>主题</th>
+                                            <th>发送数量</th>
+                                            <th>打开率</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                            <td>主题A</td>
+                                            <td>0</td>
+                                            <td>0%</td>
+                                        </tr>
+                                        <tr>
+                                            <td>主题B</td>
+                                            <td>0</td>
+                                            <td>0%</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                        
+                        <!-- 追踪与分析 -->
+                        <div class="card mb-3">
+                            <div class="card-header bg-primary text-white">追踪与分析</div>
+                            <div class="card-body">
+                                <div class="form-check mb-3">
+                                    <input class="form-check-input" type="checkbox" id="enableTracking" name="enable_tracking" {{ 'checked' if config.marketing and config.marketing.enable_tracking }}>
+                                    <label class="form-check-label" for="enableTracking">启用邮件追踪</label>
+                                    <small class="form-text text-muted d-block">追踪邮件打开和链接点击情况</small>
+                                </div>
+                                
+                                <h5>追踪数据</h5>
+                                <table class="table table-bordered">
+                                    <thead>
+                                        <tr>
+                                            <th>指标</th>
+                                            <th>数值</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                            <td>发送总数</td>
+                                            <td>0</td>
+                                        </tr>
+                                        <tr>
+                                            <td>打开数量</td>
+                                            <td>0</td>
+                                        </tr>
+                                        <tr>
+                                            <td>点击数量</td>
+                                            <td>0</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="tab-pane fade" id="about" role="tabpanel">
+                <div class="card mt-3">
+                    <div class="card-header bg-primary text-white">程序介绍</div>
+                    <div class="card-body">
+                        <h2>OuYangPaceMailer 邮件发送系统</h2>
+                        <p class="text-muted">版本 1.5.0</p>
+                        
+                        <hr>
+                        
+                        <h4>功能介绍</h4>
+                        <p>本系统是一款专业的批量邮件发送工具，专为教育机构、研究院所等单位设计，用于发送培训通知、会议邀请等邮件。</p>
+                        
+                        <h5>主要功能：</h5>
+                        <ul>
+                            <li>批量发送邮件，支持自定义收件人名称</li>
+                            <li>支持HTML富文本编辑，可插入图片</li>
+                            <li>支持添加PDF等附件</li>
+                            <li>多账号轮换发送，提高送达率</li>
+                            <li>智能时间控制，避开垃圾邮件高峰期</li>
+                            <li>A/B测试功能，优化邮件主题和内容</li>
+                            <li>IP预热功能，逐步提高发送量</li>
+                            <li>详细的发送日志和统计分析</li>
+                        </ul>
+                        
+                        <h4>使用说明</h4>
+                        <ol>
+                            <li>在"发送配置"标签页中设置收件人Excel文件、邮件主题、内容和附件</li>
+                            <li>添加发件人信息（支持多个发件人轮换）</li>
+                            <li>设置发送时间范围和间隔</li>
+                            <li>点击"开始发送"按钮开始发送邮件</li>
+                            <li>可以随时点击"停止发送"按钮中断发送</li>
+                            <li>在"营销增强"标签页中可以设置更多高级功能</li>
+                        </ol>
+                        
+                        <h4>注意事项</h4>
+                        <ul>
+                            <li>请确保收件人Excel文件格式正确（第一列为姓名，第二列为邮箱）</li>
+                            <li>请使用有效的SMTP服务器和授权码</li>
+                            <li>建议使用企业邮箱发送，个人邮箱可能有发送数量限制</li>
+                            <li>请遵守相关法律法规，不要发送垃圾邮件或违法内容</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- 文件上传模态框 -->
+    <div class="modal fade" id="uploadModal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">上传文件</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <form id="uploadForm" enctype="multipart/form-data">
+                        <input type="hidden" id="fileType" name="file_type">
+                        <div class="mb-3">
+                            <label for="fileInput" class="form-label">选择文件</label>
+                            <input class="form-control" type="file" id="fileInput" name="file">
+                        </div>
+                    </form>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                    <button type="button" class="btn btn-primary" onclick="submitUpload()">上传</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        // 全局变量
+        let logUpdateInterval = null;
+        let statusCheckInterval = null;
+        
+        // 页面加载完成后执行
+        document.addEventListener('DOMContentLoaded', function() {
+            // 检查发送状态
+            checkSendingStatus();
+            
+            // 表单提交前处理
+            document.getElementById('configForm').addEventListener('submit', function() {
+                // 将编辑器内容保存到隐藏字段
+                document.getElementById('emailContent').value = document.getElementById('editor').innerHTML;
+            });
+        });
+        
+        // 添加发件人行
+        function addSender() {
+            const container = document.getElementById('senderContainer');
+            const newRow = document.createElement('div');
+            newRow.className = 'sender-row row mb-2';
+            newRow.innerHTML = `
+                <div class="col-md-3">
+                    <input type="text" class="form-control" name="sender_email" placeholder="邮箱地址">
+                </div>
+                <div class="col-md-2">
+                    <input type="password" class="form-control" name="sender_password" placeholder="密码/授权码">
+                </div>
+                <div class="col-md-2">
+                    <input type="text" class="form-control" name="sender_name" placeholder="发件人名称" value="广东省acee卫生研究院">
+                </div>
+                <div class="col-md-2">
+                    <input type="text" class="form-control" name="sender_smtp_server" placeholder="SMTP服务器">
+                </div>
+                <div class="col-md-2">
+                    <input type="number" class="form-control" name="sender_smtp_port" placeholder="端口" value="587">
+                </div>
+                <div class="col-md-1">
+                    <button type="button" class="btn btn-danger" onclick="removeSender(this)">删除</button>
+                </div>
+            `;
+            container.appendChild(newRow);
+        }
+        
+        // 删除发件人行
+        function removeSender(button) {
+            const row = button.closest('.sender-row');
+            row.remove();
+        }
+        
+        // 上传文件
+        function uploadFile(fileType) {
+            document.getElementById('fileType').value = fileType;
+            document.getElementById('fileInput').value = '';
+            const modal = new bootstrap.Modal(document.getElementById('uploadModal'));
+            modal.show();
+        }
+        
+        // 提交上传
+        function submitUpload() {
+            const form = document.getElementById('uploadForm');
+            const formData = new FormData(form);
+            
+            fetch('/upload', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    alert(data.message);
+                    const fileType = document.getElementById('fileType').value;
+                    if (fileType === 'excel') {
+                        document.querySelector('input[name="excel_path"]').value = data.path;
+                    } else if (fileType === 'image') {
+                        document.querySelector('input[name="image_path"]').value = data.path;
+                    } else if (fileType === 'attachment') {
+                        document.querySelector('input[name="attachment_path"]').value = data.path;
+                    }
+                    bootstrap.Modal.getInstance(document.getElementById('uploadModal')).hide();
+                } else {
+                    alert(data.message);
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                alert('上传失败，请重试');
+            });
+        }
+        
+        // 应用模板
+        function applyTemplate() {
+            if (confirm('确定要应用默认模板吗？这将覆盖当前内容。')) {
+                document.getElementById('editor').innerHTML = `
+                <h2>广东省acee卫生研究院R语言医学统计分析技术培训班</h2>
+                <p>尊敬的<span style='color: red; font-weight: bold;'>&lt;人名&gt;</span>：</p>
+                <p>您好！</p>
+                <p>广东省acee卫生研究院定于2023年12月举办"R语言医学统计分析技术培训班"，诚挚邀请您参加。</p>
+                <p>培训内容包括：</p>
+                <ul>
+                <li>R语言基础与数据处理</li>
+                <li>统计分析方法与实践</li>
+                <li>医学数据可视化技术</li>
+                <li>临床研究数据分析案例</li>
+                </ul>
+                <p>详情请见附件，期待您的参与！</p>
+                <p><br></p>
+                <p>广东省acee卫生研究院</p>
+                <p>2023年11月</p>
+                `;
+            }
+        }
+        
+        // 开始发送邮件
+        function startSending() {
+            fetch('/send', {
+                method: 'POST'
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    alert(data.message);
+                    document.getElementById('sendButton').disabled = true;
+                    document.getElementById('stopButton').disabled = false;
+                    startLogUpdates();
+                    startStatusChecks();
+                } else {
+                    alert(data.message);
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                alert('启动发送任务失败，请重试');
+            });
+        }
+        
+        // 停止发送邮件
+        function stopSending() {
+            fetch('/stop', {
+                method: 'POST'
+            })
+            .then(response => response.json())
+            .then(data => {
+                alert(data.message);
+                if (data.success) {
+                    document.getElementById('sendButton').disabled = false;
+                    document.getElementById('stopButton').disabled = true;
+                    stopLogUpdates();
+                    stopStatusChecks();
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                alert('停止发送任务失败，请重试');
+            });
+        }
+        
+        // 开始日志更新
+        function startLogUpdates() {
+            if (logUpdateInterval) {
+                clearInterval(logUpdateInterval);
+            }
+            
+            logUpdateInterval = setInterval(updateLogs, 1000);
+            updateLogs(); // 立即更新一次
+        }
+        
+        // 停止日志更新
+        function stopLogUpdates() {
+            if (logUpdateInterval) {
+                clearInterval(logUpdateInterval);
+                logUpdateInterval = null;
+            }
+        }
+        
+        // 更新日志
+        function updateLogs() {
+            fetch('/logs')
+            .then(response => response.json())
+            .then(data => {
+                const logContainer = document.getElementById('logContainer');
+                logContainer.innerHTML = data.logs.join('<br>');
+                logContainer.scrollTop = logContainer.scrollHeight; // 滚动到底部
+            })
+            .catch(error => {
+                console.error('Error:', error);
+            });
+        }
+        
+        // 开始状态检查
+        function startStatusChecks() {
+            if (statusCheckInterval) {
+                clearInterval(statusCheckInterval);
+            }
+            
+            statusCheckInterval = setInterval(checkSendingStatus, 2000);
+        }
+        
+        // 停止状态检查
+        function stopStatusChecks() {
+            if (statusCheckInterval) {
+                clearInterval(statusCheckInterval);
+                statusCheckInterval = null;
+            }
+        }
+        
+        // 检查发送状态
+        function checkSendingStatus() {
+            fetch('/status')
+            .then(response => response.json())
+            .then(data => {
+                if (data.running) {
+                    document.getElementById('sendButton').disabled = true;
+                    document.getElementById('stopButton').disabled = false;
+                    startLogUpdates();
+                } else {
+                    document.getElementById('sendButton').disabled = false;
+                    document.getElementById('stopButton').disabled = true;
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+            });
+        }
+        
+        // 检查邮件内容
+        function checkEmailContent() {
+            // 简单的内容检查，实际应用中可以实现更复杂的检查逻辑
+            const content = document.getElementById('editor').innerHTML;
+            const subject = document.querySelector('input[name="subject"]').value;
+            
+            // 模拟评分
+            const subjectScore = Math.floor(Math.random() * 30) + 70; // 70-100之间的随机数
+            const contentScore = Math.floor(Math.random() * 30) + 70;
+            const totalScore = Math.floor((subjectScore + contentScore) / 2);
+            
+            // 更新进度条
+            document.getElementById('subjectScore').style.width = subjectScore + '%';
+            document.getElementById('subjectScore').textContent = subjectScore + '%';
+            document.getElementById('contentScore').style.width = contentScore + '%';
+            document.getElementById('contentScore').textContent = contentScore + '%';
+            document.getElementById('totalScore').style.width = totalScore + '%';
+            document.getElementById('totalScore').textContent = totalScore + '%';
+            
+            alert('邮件内容检查完成！
+主题评分: ' + subjectScore + '%
+内容评分: ' + contentScore + '%
+总体评分: ' + totalScore + '%');
+        }
+    </script>
+</body>
+</html>
+    
