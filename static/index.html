@@ -1,32 +1,42 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AutoEmail - Catppuccin Modern Terminal</title>
+    <title>云邮宝 - 智能发件终端</title>
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <link href="https://cdn.quilljs.com/1.3.6/quill.snow.css" rel="stylesheet">
     <link rel="stylesheet" href="/static/style.css">
     <style>
         /* Define custom font fonts inside quill container */
-        .ql-font-microsoft-yahei { font-family: "Microsoft YaHei", "微软雅黑", sans-serif; }
-        .ql-font-simsun { font-family: "SimSun", "宋体", serif; }
-        .ql-font-simhei { font-family: "SimHei", "黑体", sans-serif; }
+        .ql-font-microsoft-yahei {
+            font-family: "Microsoft YaHei", "微软雅黑", sans-serif;
+        }
+
+        .ql-font-simsun {
+            font-family: "SimSun", "宋体", serif;
+        }
+
+        .ql-font-simhei {
+            font-family: "SimHei", "黑体", sans-serif;
+        }
     </style>
 </head>
+
 <body>
     <div class="aurora-bg"></div>
     <div class="app-container">
-        
+
         <!-- Header -->
         <header class="glass-panel">
             <div class="header-left">
                 <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M4 4h16v16H4zM4 9l8 5 8-5"/>
+                    <path d="M4 4h16v16H4zM4 9l8 5 8-5" />
                 </svg>
-                <h1>智能发件终端</h1>
+                <h1>云邮宝</h1>
             </div>
-            
+
             <div class="header-controls">
                 <div class="tab-nav">
                     <button class="tab-btn active" data-tab="home">主控制台</button>
@@ -49,50 +59,81 @@
             <div class="grid-layout">
                 <!-- Left Column: Configurator -->
                 <section class="config-section glass-panel">
-                    <h2 class="section-title">营销策略配置</h2>
-                    
+                    <h2 class="section-title">智能配置</h2>
+
                     <form id="marketingForm">
-                        
+
                         <!-- Sender Accounts -->
-                        <div class="form-group" data-tooltip="填入多发信账号。格式: 邮箱----授权码 (一行一个)">
-                            <label for="senderAccounts">发件人账号池配置 <span class="hint">邮箱----密码</span></label>
-                            <textarea id="senderAccounts" rows="3" placeholder="example1@163.com----abcdefg12345&#10;example2@qq.com----xyz987654"></textarea>
+                        <div class="form-group" data-tooltip="填入多发信账号。左侧填邮箱，右侧填授权码">
+                            <label><strong>发件人账号池配置</strong></label>
+                            <div id="senderAccountsContainer">
+                                <div class="form-row account-row" style="margin-bottom: 8px;">
+                                    <input type="text" class="account-name" placeholder="发件人别名"
+                                        style="width: 120px; flex: none;">
+                                    <input type="text" class="account-email flex-1" placeholder="example1@163.com">
+                                    <input type="text" class="account-smtp flex-1" placeholder="SMTP授权码(非密码)">
+                                </div>
+                            </div>
+                            <button type="button" class="btn" id="addAccountBtn"
+                                style="margin-top: 8px; padding: 6px 12px; font-size: 0.85rem; background: var(--bg-surface); color: var(--text-primary); border: 1px solid var(--border-color);">
+                                + 继续添加账号
+                            </button>
                         </div>
 
                         <!-- Target Audience -->
-                        <div class="form-group" data-tooltip="选择包含受众人群的Excel (A列姓名, B列邮箱)">
-                            <label for="excelFile">目标受众数据 (Excel)</label>
+                        <div class="form-group" data-tooltip="上传 Excel 后，在下方选择对应的姓名列和邮箱列">
+                            <label for="excelFile"><strong>收件人</strong></label>
                             <div class="file-upload" id="excelDropzone">
                                 <input type="file" id="excelFile" accept=".xlsx,.xls">
                                 <span id="excelFileName">点击选择或拖拽 Excel 文件</span>
+                            </div>
+                            <div class="form-row" id="columnMappingRow" style="margin-top: 12px; display: none;">
+                                <div class="flex-1">
+                                    <label for="nameColumn" style="font-size: 0.8rem;">姓名列</label>
+                                    <select id="nameColumn"
+                                        style="width:100%; padding:10px 14px; background: var(--bg-surface); border:1px solid var(--border-color); border-radius: var(--radius-sm); color: var(--text-primary); font-family: inherit;">
+                                        <option value="">-- 请先上传 Excel --</option>
+                                    </select>
+                                </div>
+                                <div class="flex-1">
+                                    <label for="emailColumn" style="font-size: 0.8rem;">邮箱列</label>
+                                    <select id="emailColumn"
+                                        style="width:100%; padding:10px 14px; background: var(--bg-surface); border:1px solid var(--border-color); border-radius: var(--radius-sm); color: var(--text-primary); font-family: inherit;">
+                                        <option value="">-- 请先上传 Excel --</option>
+                                    </select>
+                                </div>
                             </div>
                         </div>
 
                         <!-- Subject -->
                         <div class="form-row">
                             <div class="form-group flex-1" data-tooltip="邮件展示主题，如：【邀约】XXX培训班">
-                                <label for="emailSubject">发信模板主题</label>
-                                <input type="text" id="emailSubject" value="【广东省公共卫生研究院】R语言医学统计分析技术培训班" placeholder="请输入主题">
+                                <label for="emailSubject"><strong>主题</strong></label>
+                                <input type="text" id="emailSubject" value="【广东省公共卫生研究院】R语言医学统计分析技术培训班"
+                                    placeholder="请输入主题">
                             </div>
                         </div>
 
                         <!-- Attachment PDF -->
                         <div class="form-row">
                             <div class="form-group flex-1" data-tooltip="将作为邮件底部的安全附件发送">
-                                <label for="attachmentFile">核心附件 (PDF/可选)</label>
+                                <label for="attachmentFile"><strong>附件</strong></label>
                                 <input type="file" id="attachmentFile" class="file-input-simple" accept=".pdf">
                             </div>
                         </div>
 
                         <!-- Rich Text Editor -->
                         <div class="form-group" data-tooltip="支持字体、字号、行距、多图混排；并允许直接粘贴微信截图">
-                            <label>富文本正文编写 <span class="hint">占位符: &lt;人名&gt;</span></label>
+                            <label><strong>富文本正文编写</strong> <span class="hint">占位符: &lt;人名&gt;</span></label>
                             <div class="editor-container">
                                 <div id="editor">
-                                    <h2 class="ql-align-center"><span class="ql-font-microsoft-yahei" style="font-size: 20px;">广东省公共卫生研究院技术培训班</span></h2>
+                                    <h2 class="ql-align-center"><span class="ql-font-microsoft-yahei"
+                                            style="font-size: 20px;">广东省公共卫生研究院技术培训班</span></h2>
                                     <p><br></p>
-                                    <p><span class="ql-font-microsoft-yahei" style="font-size: 16px;">尊敬的&lt;人名&gt;：</span></p>
-                                    <p><span class="ql-font-microsoft-yahei" style="font-size: 16px;">您好！定于本年举办培训班，诚挚邀请您参加。</span></p>
+                                    <p><span class="ql-font-microsoft-yahei"
+                                            style="font-size: 16px;">尊敬的&lt;人名&gt;：</span></p>
+                                    <p><span class="ql-font-microsoft-yahei"
+                                            style="font-size: 16px;">您好！定于本年举办培训班，诚挚邀请您参加。</span></p>
                                 </div>
                             </div>
                         </div>
@@ -126,8 +167,9 @@
 
                         <!-- Actions -->
                         <div class="action-bar">
-                            <button type="button" class="btn btn-primary" id="startBtn" data-tooltip="读取以上配置进队并执行">启动队列引擎</button>
-                            <button type="button" class="btn btn-danger" id="stopBtn" disabled data-tooltip="发送终止信号至后台">安全终止</button>
+                            <button type="button" class="btn btn-primary btn-send" id="startBtn">发送</button>
+                            <button type="button" class="btn btn-danger" id="stopBtn" disabled
+                                data-tooltip="发送终止信号至后台">安全终止</button>
                         </div>
                     </form>
                 </section>
@@ -160,7 +202,13 @@
                     </div>
 
                     <div class="glass-panel logs-panel">
-                        <h3>实时控制台记录</h3>
+                        <div class="logs-header">
+                            <h3>实时控制台记录</h3>
+                            <button class="btn btn-export" id="exportFailedBtn" style="display: none;"
+                                data-tooltip="导出所有投递失败的邮箱为 Excel 文件">
+                                📥 导出失败记录 (<span id="failedCountBadge">0</span>)
+                            </button>
+                        </div>
                         <div class="terminal-logs" id="logContainer">
                             <div class="log-line text-muted">Awaiting system initialization...</div>
                         </div>
@@ -172,23 +220,34 @@
         <!-- Tab: Documentation -->
         <main class="tab-content" id="tab-doc">
             <div class="glass-panel doc-content">
-                <h2>系统使用准则与架构介绍 (v2.0)</h2>
-                
+                <h2>系统使用准则与架构介绍 (v2.1)</h2>
+
                 <h3>📖 数据模板规范</h3>
-                <p>目标受众 Excel 请严格按照如下规范整理，这决定了引擎能否正确提取：</p>
+                <p>本版已支持 <strong>自定义列映射</strong>。上传 Excel 后，系统自动读取表头列名，您可在前端下拉框中选择"哪一列是姓名"、"哪一列是邮箱"。不再强制 A列/B列的固定位置。</p>
                 <ul>
-                    <li><strong>第一列 (A列)</strong>为收件人姓名 (例: 张三)。程序会在正文中替换 <code>&lt;人名&gt;</code> 为该列的值。</li>
-                    <li><strong>第二列 (B列)</strong>为收件人邮箱 (例: example@163.com)。</li>
+                    <li><strong>智能猜测：</strong>如果列名中包含"姓名"、"name"，或"邮箱"、"email"等关键词，系统会自动预选。</li>
+                    <li><strong>向下兼容：</strong>若未选择列映射（如旧版 Excel），程序仍按第一列=姓名、第二列=邮箱的默认逻辑运行。</li>
                     <li><em>请确保表格不要有合并单元格以及隐藏行。</em></li>
                 </ul>
 
-                <h3>⚡ 防封禁与到达率策略 (必读)</h3>
-                <p>使用 SMTP 授权码自动发送本质等同于模拟网页点击发送。如果您在短时间内极高频地对外域同种邮箱发起轰炸：</p>
+                <h3>⚡ 反垃圾引擎策略 v2.1 (核心升级)</h3>
+                <p>本版本对邮件发送引擎进行了深度反垃圾优化，从以下多个维度模拟真人发件行为：</p>
                 <ul>
-                    <li><strong>发送行为会被大厂捕获：</strong> 网易、腾讯等具有极其敏感的同 IP 高频发信检测机制。</li>
-                    <li><strong>策略配置：</strong> 我们允许用户在主页面配置 <code>一次性并发量 (默认1)</code>。如果您设置为 30，系统将会在瞬间连同抛出30个信道，但这会极大幅增加进垃圾箱甚至当场挂掉账号的风险。</li>
-                    <li><strong>推荐做法：</strong> 轮转准备 3 到 5 个发件邮箱池，单次并发维持在 1 或 2，设置每次发送的抖动间隔最少 5~15 秒，以追求极高的<strong>送达率 (Inbox Rate)</strong>，而不只是单纯追求速度。</li>
+                    <li><strong>🔐 主题零宽字符混淆：</strong>每封邮件的主题行中自动插入不可见的 Unicode 零宽字符（ZWSP / ZWNJ / ZWJ），使得每封邮件的 Subject
+                        哈希唯一，但人眼看到的文字完全一致。移除了旧版 <code>- No.{编号}</code> 的批量指纹。</li>
+                    <li><strong>📝 正文唯一化（HTML 注释替代）：</strong>移除了旧版 <code>display:none</code>
+                        隐藏随机字符串的做法（该做法会被反垃圾引擎直接扣分）。改用 HTML 注释
+                        <code>&lt;!-- ref-xxxxx --&gt;</code>，不渲染、不扣分，但让每封邮件的正文哈希不同。
+                    </li>
+                    <li><strong>📮 邮件头伪装：</strong>自动添加
+                        <code>Message-ID</code>、<code>Date</code>、<code>X-Mailer</code>（随机模拟 Foxmail / Outlook /
+                        Thunderbird）、<code>X-Priority</code> 等标准头部，使邮件结构与正常客户端发出的一致。
+                    </li>
+                    <li><strong>🔄 SMTP 连接复用：</strong>同一发件人连续发送时复用 SMTP 连接，减少高频短连接指纹。连接异常时自动清除缓存重建。</li>
+                    <li><strong>😴 疲劳递增机制：</strong>随着已发送邮件数量累积，发件间隔会自动逐步拉长（疲劳因子每 50 封增长 15%），模拟人类"越发越慢"的自然节奏。</li>
+                    <li><strong>⚡ 批内微抖动：</strong>同一批次内的邮件间增加 0.3~1.5 秒的随机微延迟，避免精确等间距的机器特征。</li>
                 </ul>
+                <p><strong>推荐配置：</strong>轮转 3~5 个发件池，单批并发 1~2，基础抖动 5~15 秒，即可实现较高的收件箱到达率。</p>
 
                 <h3>🖌️ 富文本特色</h3>
                 <p>改版后的 Quill 引擎已经支持：</p>
@@ -201,7 +260,8 @@
                 <p>本系统技术栈经过升级重构。</p>
                 <ul>
                     <li><strong>基础架构技术：</strong> FastAPI (Python) + pywebview + 纯原生 ES6。</li>
-                    <li><strong>界面体验与智能内核驱动：</strong> 联合 Gemini 3.1 Pro 参与设计迭代、OrionPace、及前序 Claude opus4.6 的开发基因协同构筑。</li>
+                    <li><strong>界面体验与智能内核驱动：</strong> 联合 Gemini 3.1 Pro 参与设计迭代、OrionPace、及 Claude Opus 4.6 的开发基因协同构筑。
+                    </li>
                     <li><strong>UI指导基准：</strong> 采用 <code>Catppuccin</code> (Latte / Macchiato) 行业顶尖护眼美学体系。</li>
                 </ul>
             </div>
@@ -213,4 +273,5 @@
     <script src="https://cdn.quilljs.com/1.3.6/quill.min.js"></script>
     <script src="/static/script.js"></script>
 </body>
+
 </html>

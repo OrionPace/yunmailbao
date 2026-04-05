@@ -1,4 +1,4 @@
-
+.env
 *.bak
 __pycache__/
 *.pyc
@@ -6,3 +6,4 @@ logs/
 email_log.txt
 uploads/
 .venv/
+conversation_history

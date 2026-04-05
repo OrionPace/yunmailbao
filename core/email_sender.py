@@ -8,12 +8,31 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.image import MIMEImage
 from email.mime.application import MIMEApplication
-from email.utils import formataddr
+from email.utils import formataddr, formatdate, make_msgid
 from email.header import Header
+
+# Zero-width characters for subject uniqueness (invisible to human eyes)
+ZWSP = '\u200b'  # Zero-Width Space
+ZWNJ = '\u200c'  # Zero-Width Non-Joiner
+ZWJ  = '\u200d'  # Zero-Width Joiner
+ZW_CHARS = [ZWSP, ZWNJ, ZWJ]
+
+# Simulated X-Mailer headers to mimic real email clients
+MAILER_POOL = [
+    "Foxmail 7.2.25.228 [cn]",
+    "Microsoft Outlook 16.0",
+    "Mozilla Thunderbird 115.9.0",
+    "Foxmail 7.2.23 [cn]",
+    "Microsoft Outlook 15.0",
+    "Mozilla/5.0",
+    "The Bat! 10.5",
+]
+
 
 class EmailSenderCore:
     def __init__(self, logger=None):
         self.logger = logger or logging.getLogger("email_sender_core")
+        self._connection_cache = {}  # Cache SMTP connections per sender email
 
     @staticmethod
     def validate_email(email_str):
@@ -21,21 +40,37 @@ class EmailSenderCore:
         pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
         return re.match(pattern, str(email_str).strip()) is not None
 
+    def _generate_zwsp_salt(self):
+        """Generate a random invisible zero-width character sequence.
+        This makes every subject line unique by hash, but identical to human eyes."""
+        length = random.randint(2, 5)
+        return ''.join(random.choice(ZW_CHARS) for _ in range(length))
+
+    def _generate_body_salt(self):
+        """Generate an HTML comment with random content to make email body unique.
+        HTML comments are ignored by renderers but change the content hash."""
+        salt = f"<!-- ref-{random.randint(10000, 99999)}-{int(time.time() * 1000) % 100000} -->"
+        return salt
+
     def create_email_msg(self, sender, recipient, email_index, html_content, subject, image_path=None, attachment_path=None):
         msg = MIMEMultipart()
+        
+        # --- Anti-spam: proper email headers ---
+        sender_domain = sender["email"].split("@")[1] if "@" in sender["email"] else "mail.local"
         msg["From"] = formataddr((sender["name"], sender["email"]))
-        msg["To"] = recipient["email"]
-        
-        # Subject with rotating formatting to avoid hash collision
-        dynamic_subject = f"{subject} - No.{email_index}"
-        msg["Subject"] = Header(dynamic_subject, 'utf-8').encode()
+        msg["To"] = formataddr((recipient["name"], recipient["email"]))
+        msg["Subject"] = Header(subject + self._generate_zwsp_salt(), 'utf-8').encode()
+        msg["Date"] = formatdate(localtime=True)
+        msg["Message-ID"] = make_msgid(domain=sender_domain)
+        msg["X-Mailer"] = random.choice(MAILER_POOL)
+        msg["MIME-Version"] = "1.0"
+        msg["X-Priority"] = "3"  # Normal priority
 
-        # Dynamic Content Replacement (Anti-spam strategy)
-        content = html_content.replace("<人名>", recipient["name"])
+        # Dynamic Content Replacement
+        content = html_content.replace("<人名>", recipient["name"]).replace("&lt;人名&gt;", recipient["name"])
         
-        # Inject an invisible random hash to make every email body unique
-        random_hash = f"<div style='display:none;'>uid-{random.random()}-{time.time()}</div>"
-        content += random_hash
+        # Inject an invisible HTML comment for body uniqueness (instead of display:none div)
+        content += self._generate_body_salt()
 
         msg.attach(MIMEText(content, "html"))
 
@@ -62,6 +97,48 @@ class EmailSenderCore:
 
         return msg
 
+    def _get_connection(self, sender):
+        """Get or create a cached SMTP connection for connection reuse."""
+        key = sender["email"]
+        
+        # Check if we have an existing connection
+        if key in self._connection_cache:
+            try:
+                # Test if connection is still alive
+                self._connection_cache[key].noop()
+                return self._connection_cache[key]
+            except Exception:
+                # Connection is dead, remove it
+                self._close_connection(key)
+        
+        # Create new connection
+        port = int(sender["smtp_port"])
+        server_host = sender["smtp_server"].lower()
+        
+        if port == 465:
+            server = smtplib.SMTP_SSL(server_host, port, timeout=30)
+        else:
+            server = smtplib.SMTP(server_host, port, timeout=30)
+            server.starttls()
+        
+        server.login(sender["email"], sender["password"])
+        self._connection_cache[key] = server
+        return server
+
+    def _close_connection(self, key):
+        """Safely close and remove a cached connection."""
+        if key in self._connection_cache:
+            try:
+                self._connection_cache[key].quit()
+            except Exception:
+                pass
+            del self._connection_cache[key]
+
+    def close_all_connections(self):
+        """Close all cached SMTP connections."""
+        for key in list(self._connection_cache.keys()):
+            self._close_connection(key)
+
     def send_single(self, sender, recipient, email_index, html_content, subject, image_path=None, attachment_path=None):
         max_retries = 3
         retry_count = 0
@@ -71,19 +148,9 @@ class EmailSenderCore:
             try:
                 msg = self.create_email_msg(sender, recipient, email_index, html_content, subject, image_path, attachment_path)
                 
-                # SMTP logic
-                port = int(sender["smtp_port"])
-                server_host = sender["smtp_server"].lower()
-                
-                if port == 465:
-                    server = smtplib.SMTP_SSL(server_host, port, timeout=30)
-                else:
-                    server = smtplib.SMTP(server_host, port, timeout=30)
-                    server.starttls()
-                
-                server.login(sender["email"], sender["password"])
+                # Use connection pool for reuse
+                server = self._get_connection(sender)
                 server.sendmail(sender["email"], recipient["email"], msg.as_string())
-                server.quit()
                 
                 return True, "Success"
                 
@@ -93,9 +160,13 @@ class EmailSenderCore:
                 err_str = str(e).lower()
                 # If connection closed but practically sent
                 if 'connection' in err_str or 'timeout' in err_str or '(-1,' in err_str:
+                    # Connection died - clear cache so next call reconnects
+                    self._close_connection(sender["email"])
                     return True, "Warning: Connection closed but likely sent."
                 retry_count += 1
                 error_msg = str(e)
+                # Clear connection cache on error so we reconnect
+                self._close_connection(sender["email"])
                 time.sleep(2)
                 
         return False, f"Failed after {max_retries} retries: {error_msg}"
