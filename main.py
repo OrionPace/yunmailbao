@@ -1,4 +1,5 @@
 import os
+import sys
 import time
 import datetime
 import shutil
@@ -14,8 +15,45 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from core.engine import MarketingEngine
 
-# Initialize dotenv
-load_dotenv()
+# --- Path Resolution for PyInstaller ---
+def get_base_path():
+    """Get the path where bundled resources (static, templates) are located.
+    When frozen by PyInstaller, resources are in sys._MEIPASS temp dir.
+    When running from source, resources are in the script's directory."""
+    if getattr(sys, 'frozen', False):
+        return sys._MEIPASS
+    return os.path.dirname(os.path.abspath(__file__))
+
+def get_runtime_dir():
+    """Get the directory where the exe is located (for user data like logs, uploads, .env).
+    When running from source, this is the script's directory."""
+    if getattr(sys, 'frozen', False):
+        return os.path.dirname(sys.executable)
+    return os.path.dirname(os.path.abspath(__file__))
+
+base_dir = get_base_path()       # Where bundled assets live
+runtime_dir = get_runtime_dir()  # Where user data lives (next to .exe)
+
+# Initialize dotenv - load from runtime directory (next to .exe)
+env_path = os.path.join(runtime_dir, '.env')
+env_example_path = os.path.join(runtime_dir, '.env.example')
+
+# Auto-create .env from example if it doesn't exist
+if not os.path.exists(env_path):
+    # Copy bundled .env.example to runtime dir
+    bundled_example = os.path.join(base_dir, '.env.example')
+    if os.path.exists(bundled_example):
+        shutil.copy2(bundled_example, env_path)
+    elif os.path.exists(env_example_path):
+        shutil.copy2(env_example_path, env_path)
+
+load_dotenv(env_path)
+
+# Set up directories in runtime location (next to .exe)
+log_dir = os.path.join(runtime_dir, "logs")
+upload_dir = os.path.join(runtime_dir, "uploads")
+os.makedirs(log_dir, exist_ok=True)
+os.makedirs(upload_dir, exist_ok=True)
 
 # Set up logging
 logging.basicConfig(
@@ -23,11 +61,9 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     handlers=[
         logging.StreamHandler(),
-        logging.FileHandler("logs/email_app.log", encoding="utf-8") if os.path.exists("logs") else logging.StreamHandler()
+        logging.FileHandler(os.path.join(log_dir, "email_app.log"), encoding="utf-8")
     ]
 )
-if not os.path.exists("logs"):
-    os.makedirs("logs", exist_ok=True)
 
 logger = logging.getLogger("AutoEmailApp")
 engine = MarketingEngine(logger)
@@ -42,19 +78,18 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-os.makedirs("static", exist_ok=True)
-os.makedirs("uploads", exist_ok=True)
-app.mount("/static", StaticFiles(directory="static"), name="static")
+static_dir = os.path.join(base_dir, "static")
+app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
 @app.get("/")
 def serve_index():
-    return FileResponse("static/index.html")
+    return FileResponse(os.path.join(static_dir, "index.html"))
 
 @app.post("/api/upload")
 async def upload_file(file: UploadFile = File(...)):
     """API for uploading Excel, Image or PDF attachments"""
     try:
-        file_location = f"uploads/{file.filename}"
+        file_location = os.path.join(upload_dir, file.filename)
         with open(file_location, "wb+") as file_object:
             shutil.copyfileobj(file.file, file_object)
         return JSONResponse(content={"status": "success", "file_path": file_location})
@@ -176,7 +211,7 @@ def export_failed():
     df = pd.DataFrame(failed, columns=["name", "email", "reason", "detail", "time", "sender_used"])
     df.columns = ["姓名", "邮箱", "失败原因", "详细错误", "发送时间", "使用的发件账号"]
     
-    export_path = "uploads/failed_recipients.xlsx"
+    export_path = os.path.join(upload_dir, "failed_recipients.xlsx")
     df.to_excel(export_path, index=False, engine='openpyxl')
     
     return FileResponse(
