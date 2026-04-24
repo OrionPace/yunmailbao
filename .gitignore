@@ -6,4 +6,13 @@ logs/
 email_log.txt
 uploads/
 .venv/
-conversation_history
+build/
+dist/
+coversation_history/
+conversation_history/
+*.log
+*.tmp
+*.pyc
+tests/fixtures/*.xlsx
+remotion/**/node_modules/
+remotion/**/out/

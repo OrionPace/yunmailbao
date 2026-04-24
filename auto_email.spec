@@ -8,7 +8,6 @@ block_cipher = None
 # Collect all data files
 datas = [
     ('static', 'static'),           # Frontend UI files
-    ('templates', 'templates'),     # Jinja2 templates (legacy, but include for safety)
     ('.env.example', '.'),          # Example env file (will be copied to runtime dir on first run)
 ]
 

@@ -109,8 +109,7 @@
                         <div class="form-row">
                             <div class="form-group flex-1" data-tooltip="邮件展示主题，如：【邀约】XXX培训班">
                                 <label for="emailSubject"><strong>主题</strong></label>
-                                <input type="text" id="emailSubject" value="【广东省公共卫生研究院】R语言医学统计分析技术培训班"
-                                    placeholder="请输入主题">
+                                <input type="text" id="emailSubject" placeholder="请输入邮件主题">
                             </div>
                         </div>
 
@@ -126,15 +125,7 @@
                         <div class="form-group" data-tooltip="支持字体、字号、行距、多图混排；并允许直接粘贴微信截图">
                             <label><strong>富文本正文编写</strong> <span class="hint">占位符: &lt;人名&gt;</span></label>
                             <div class="editor-container">
-                                <div id="editor">
-                                    <h2 class="ql-align-center"><span class="ql-font-microsoft-yahei"
-                                            style="font-size: 20px;">广东省公共卫生研究院技术培训班</span></h2>
-                                    <p><br></p>
-                                    <p><span class="ql-font-microsoft-yahei"
-                                            style="font-size: 16px;">尊敬的&lt;人名&gt;：</span></p>
-                                    <p><span class="ql-font-microsoft-yahei"
-                                            style="font-size: 16px;">您好！定于本年举办培训班，诚挚邀请您参加。</span></p>
-                                </div>
+                                <div id="editor"></div>
                             </div>
                         </div>
 
@@ -220,50 +211,80 @@
         <!-- Tab: Documentation -->
         <main class="tab-content" id="tab-doc">
             <div class="glass-panel doc-content">
-                <h2>系统使用准则与架构介绍 (v2.1)</h2>
+                <div class="doc-hero">
+                    <div>
+                        <span class="doc-kicker">YUNYOUBAO DOC</span>
+                        <h2>云邮宝操作手册</h2>
+                        <p>从账号配置、名单导入、正文编写到发送监控的一页式说明。适合首次使用，也适合每次正式发送前做快速核对。</p>
+                    </div>
+                    <div class="doc-status-card">
+                        <span>运行模式</span>
+                        <strong>本地优先</strong>
+                        <small>账号与日志默认保存在当前机器</small>
+                    </div>
+                </div>
 
-                <h3>📖 数据模板规范</h3>
-                <p>本版已支持 <strong>自定义列映射</strong>。上传 Excel 后，系统自动读取表头列名，您可在前端下拉框中选择"哪一列是姓名"、"哪一列是邮箱"。不再强制 A列/B列的固定位置。</p>
-                <ul>
-                    <li><strong>智能猜测：</strong>如果列名中包含"姓名"、"name"，或"邮箱"、"email"等关键词，系统会自动预选。</li>
-                    <li><strong>向下兼容：</strong>若未选择列映射（如旧版 Excel），程序仍按第一列=姓名、第二列=邮箱的默认逻辑运行。</li>
-                    <li><em>请确保表格不要有合并单元格以及隐藏行。</em></li>
-                </ul>
+                <div class="doc-grid">
+                    <section class="doc-block">
+                        <h3>1. 准备发件账号</h3>
+                        <p>在“发件人账号池配置”中填写发件人别名、邮箱地址和 SMTP 授权码。授权码不是邮箱登录密码，建议为每个邮箱单独生成。</p>
+                        <ul>
+                            <li>QQ 邮箱默认使用 <code>smtp.qq.com:587</code>。</li>
+                            <li>163 邮箱默认使用 <code>smtp.163.com:465</code>。</li>
+                            <li>正式发送建议准备 2-5 个账号轮换，降低单账号短时间压力。</li>
+                        </ul>
+                    </section>
 
-                <h3>⚡ 反垃圾引擎策略 v2.1 (核心升级)</h3>
-                <p>本版本对邮件发送引擎进行了深度反垃圾优化，从以下多个维度模拟真人发件行为：</p>
-                <ul>
-                    <li><strong>🔐 主题零宽字符混淆：</strong>每封邮件的主题行中自动插入不可见的 Unicode 零宽字符（ZWSP / ZWNJ / ZWJ），使得每封邮件的 Subject
-                        哈希唯一，但人眼看到的文字完全一致。移除了旧版 <code>- No.{编号}</code> 的批量指纹。</li>
-                    <li><strong>📝 正文唯一化（HTML 注释替代）：</strong>移除了旧版 <code>display:none</code>
-                        隐藏随机字符串的做法（该做法会被反垃圾引擎直接扣分）。改用 HTML 注释
-                        <code>&lt;!-- ref-xxxxx --&gt;</code>，不渲染、不扣分，但让每封邮件的正文哈希不同。
-                    </li>
-                    <li><strong>📮 邮件头伪装：</strong>自动添加
-                        <code>Message-ID</code>、<code>Date</code>、<code>X-Mailer</code>（随机模拟 Foxmail / Outlook /
-                        Thunderbird）、<code>X-Priority</code> 等标准头部，使邮件结构与正常客户端发出的一致。
-                    </li>
-                    <li><strong>🔄 SMTP 连接复用：</strong>同一发件人连续发送时复用 SMTP 连接，减少高频短连接指纹。连接异常时自动清除缓存重建。</li>
-                    <li><strong>😴 疲劳递增机制：</strong>随着已发送邮件数量累积，发件间隔会自动逐步拉长（疲劳因子每 50 封增长 15%），模拟人类"越发越慢"的自然节奏。</li>
-                    <li><strong>⚡ 批内微抖动：</strong>同一批次内的邮件间增加 0.3~1.5 秒的随机微延迟，避免精确等间距的机器特征。</li>
-                </ul>
-                <p><strong>推荐配置：</strong>轮转 3~5 个发件池，单批并发 1~2，基础抖动 5~15 秒，即可实现较高的收件箱到达率。</p>
+                    <section class="doc-block">
+                        <h3>2. 导入收件人 Excel</h3>
+                        <p>上传 Excel 后，系统会读取表头并显示“姓名列”和“邮箱列”映射。列名包含“姓名 / name / 邮箱 / email”时会自动预选。</p>
+                        <ul>
+                            <li>不要使用合并单元格、隐藏行或空表头。</li>
+                            <li>邮箱列必须是有效邮箱格式。</li>
+                            <li>未选择映射时，系统会回退到第一列姓名、第二列邮箱。</li>
+                        </ul>
+                    </section>
 
-                <h3>🖌️ 富文本特色</h3>
-                <p>改版后的 Quill 引擎已经支持：</p>
-                <ul>
-                    <li>将微信/QQ截图直接 <code>Ctrl+V</code> 贴入编辑光标处，内部会自动转码为 Base64 与文字同传，无需当做独立附件。</li>
-                    <li>提供中文字体（如 微软雅黑, 宋体）以及标准字号排版（如 小四[16px]）。</li>
-                </ul>
+                    <section class="doc-block">
+                        <h3>3. 编写正文与附件</h3>
+                        <p>富文本编辑器默认空白，避免把示例机构内容误发。正文中可使用 <code>&lt;人名&gt;</code> 占位符，发送时会替换为 Excel 中对应姓名。</p>
+                        <ul>
+                            <li>支持字体、字号、加粗、对齐、列表、颜色和图片。</li>
+                            <li>支持直接粘贴截图到正文中。</li>
+                            <li>附件当前建议使用 PDF，便于收件端打开和归档。</li>
+                        </ul>
+                    </section>
 
-                <h3>👥 研发背书</h3>
-                <p>本系统技术栈经过升级重构。</p>
-                <ul>
-                    <li><strong>基础架构技术：</strong> FastAPI (Python) + pywebview + 纯原生 ES6。</li>
-                    <li><strong>界面体验与智能内核驱动：</strong> 联合 Gemini 3.1 Pro 参与设计迭代、OrionPace、及 Claude Opus 4.6 的开发基因协同构筑。
-                    </li>
-                    <li><strong>UI指导基准：</strong> 采用 <code>Catppuccin</code> (Latte / Macchiato) 行业顶尖护眼美学体系。</li>
-                </ul>
+                    <section class="doc-block">
+                        <h3>4. 设置发送节奏</h3>
+                        <p>发送窗口用于限制每日发件时间，批次和抖动用于控制发送速度。对冷启动账号，建议从保守参数开始。</p>
+                        <ul>
+                            <li>窗口开始/结束：只在允许时段发件。</li>
+                            <li>单批次并发：新账号建议设为 <code>1</code>。</li>
+                            <li>最小/最大抖动：建议先用 <code>5-15</code> 秒观察稳定性。</li>
+                        </ul>
+                    </section>
+
+                    <section class="doc-block">
+                        <h3>5. 监控与失败导出</h3>
+                        <p>右侧控制台会显示总计划、已送达、失败和队列进度。任务结束后，如存在失败记录，可导出失败清单继续排查。</p>
+                        <ul>
+                            <li>失败原因会按地址无效、认证失败、反垃圾拦截、连接异常等分类。</li>
+                            <li>安全终止会请求后台停止任务，并关闭 SMTP 连接。</li>
+                            <li>日志文件保存在运行目录的 <code>logs/</code>。</li>
+                        </ul>
+                    </section>
+
+                    <section class="doc-block doc-warning">
+                        <h3>上线前注意</h3>
+                        <p>当前产品适合本地可信环境。部署到公网前，必须补登录鉴权、上传限制、CORS 白名单和操作审计。</p>
+                        <ul>
+                            <li>阿里云部署和域名备案流程见 <code>docs/deployment-guide.md</code>。</li>
+                            <li>Windows 交付版使用 <code>build.bat</code> 打包。</li>
+                            <li>不要将 <code>.env</code> 或真实授权码提交到 Git。</li>
+                        </ul>
+                    </section>
+                </div>
             </div>
         </main>
 
