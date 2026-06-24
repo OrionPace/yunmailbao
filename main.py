@@ -52,8 +52,10 @@ load_dotenv(env_path)
 # Set up directories in runtime location (next to .exe)
 log_dir = os.path.join(runtime_dir, "logs")
 upload_dir = os.path.join(runtime_dir, "uploads")
+state_dir = os.path.join(runtime_dir, "state")  # 断点续传检查点目录
 os.makedirs(log_dir, exist_ok=True)
 os.makedirs(upload_dir, exist_ok=True)
+os.makedirs(state_dir, exist_ok=True)
 
 # Set up logging
 logging.basicConfig(
@@ -67,6 +69,9 @@ logging.basicConfig(
 
 logger = logging.getLogger("AutoEmailApp")
 engine = MarketingEngine(logger)
+# 注册断点续传检查点路径，并恢复上次未完成任务的进度（供 UI 提示继续）
+engine.set_checkpoint_path(os.path.join(state_dir, "checkpoint.json"))
+engine.load_checkpoint_into_memory()
 
 app = FastAPI(title="AutoEmail AI Marketing")
 
@@ -127,7 +132,19 @@ async def get_excel_columns(file_path: str):
 @app.post("/api/start")
 async def start_campaign(request: dict, background_tasks: BackgroundTasks):
     config = request
-    
+
+    if engine.is_running:
+        return JSONResponse(status_code=400, content={"status": "error", "message": "任务已在运行中"})
+
+    # 断点续传：mode=resume 时直接用磁盘上保存的 config 继续，无需前端重传账号/正文
+    mode = config.get("mode", "new")
+    if mode == "resume":
+        resume_cfg = engine.get_resume_config()
+        if not resume_cfg:
+            return JSONResponse(status_code=400, content={"status": "error", "message": "没有可继续的任务，请重新发起。"})
+        background_tasks.add_task(engine.run_campaign, resume_cfg, True)
+        return JSONResponse(content={"status": "success", "message": "已继续上次未完成的任务"})
+
     senders_text = config.get("senders_text", "")
     senders = []
     lines = senders_text.strip().split("\n")
@@ -165,11 +182,8 @@ async def start_campaign(request: dict, background_tasks: BackgroundTasks):
     # Pass column mapping to engine
     config['name_column'] = config.get('name_column', '')
     config['email_column'] = config.get('email_column', '')
-    
-    if engine.is_running:
-         return JSONResponse(status_code=400, content={"status": "error", "message": "任务已在运行中"})
-         
-    background_tasks.add_task(engine.run_campaign, config)
+
+    background_tasks.add_task(engine.run_campaign, config, False)
     return JSONResponse(content={"status": "success", "message": "任务已启动"})
 
 def __get_senders_sync():
@@ -199,6 +213,21 @@ def get_status():
         "logs": engine.logs,
         "failed_count": len(engine.failed_recipients)
     })
+
+@app.get("/api/checkpoint")
+def get_checkpoint():
+    """返回是否存在可继续的未完成任务，供前端显示「继续上次任务」横幅。"""
+    return JSONResponse(content=engine.checkpoint_summary())
+
+@app.post("/api/clear-checkpoint")
+def clear_checkpoint():
+    """放弃上次未完成任务，清除磁盘检查点与内存进度。"""
+    if engine.is_running:
+        return JSONResponse(status_code=400, content={"status": "error", "message": "任务正在运行，无法清除进度。"})
+    engine._clear_checkpoint()
+    engine.progress = {"total": 0, "sent": 0, "failed": 0, "current": 0}
+    engine.failed_recipients = []
+    return JSONResponse(content={"status": "success", "message": "已清除上次任务进度"})
 
 @app.get("/api/export-failed")
 def export_failed():

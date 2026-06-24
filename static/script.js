@@ -286,6 +286,7 @@ btnStart.addEventListener('click', async () => {
     }
     
     const config = {
+        mode: "new",
         excel_path: uploadedPaths.excel,
         attachment_path: uploadedPaths.attachment,
         subject: document.getElementById('emailSubject').value,
@@ -382,6 +383,83 @@ function startTracking() {
     }, 1500);
 }
 
+// --- Resume (断点续传) banner wiring ---
+const resumeBanner = document.getElementById('resumeBanner');
+const resumeBannerDetail = document.getElementById('resumeBannerDetail');
+const resumeBtn = document.getElementById('resumeBtn');
+const discardBtn = document.getElementById('discardBtn');
+
+function hideResumeBanner() {
+    if (resumeBanner) resumeBanner.style.display = 'none';
+}
+
+async function checkResumableTask() {
+    try {
+        const res = await fetch('/api/checkpoint');
+        const cp = await res.json();
+        if (cp.resumable) {
+            const subjectPart = cp.subject ? `「${cp.subject}」` : '';
+            resumeBannerDetail.textContent =
+                `任务${subjectPart}：已发送 ${cp.sent} / ${cp.total}，失败 ${cp.failed}，更新于 ${cp.updated_at}`;
+            resumeBanner.style.display = 'flex';
+            // Reflect restored progress on the dashboard right away
+            valTotal.textContent = cp.total;
+            valSent.textContent = cp.sent;
+            valFailed.textContent = cp.failed;
+            if (cp.total > 0) {
+                const percent = Math.floor((cp.sent / cp.total) * 100);
+                progressBar.style.width = `${percent}%`;
+                progressText.textContent = `${percent}%`;
+            }
+        }
+    } catch (e) {
+        // No checkpoint endpoint / no task — ignore silently
+    }
+}
+
+if (resumeBtn) {
+    resumeBtn.addEventListener('click', async () => {
+        try {
+            const res = await fetch('/api/start', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ mode: 'resume' })
+            });
+            const data = await res.json();
+            if (data.status === 'success') {
+                hideResumeBanner();
+                btnStart.disabled = true;
+                btnStop.disabled = false;
+                statusDot.className = 'dot active';
+                statusText.textContent = '营销引擎运行中（续传）...';
+                lastLogCount = 0;
+                startTracking();
+            } else {
+                alert(data.message);
+            }
+        } catch (e) {
+            appendLog(`[系统错误] ${e.message}`);
+        }
+    });
+}
+
+if (discardBtn) {
+    discardBtn.addEventListener('click', async () => {
+        if (!confirm('确定放弃上次未完成的任务吗？已发送的进度记录将被清除（已投递的邮件不受影响）。')) return;
+        try {
+            await fetch('/api/clear-checkpoint', { method: 'POST' });
+            hideResumeBanner();
+            valTotal.textContent = 0;
+            valSent.textContent = 0;
+            valFailed.textContent = 0;
+            progressBar.style.width = '0%';
+            progressText.textContent = '0%';
+        } catch (e) {
+            appendLog(`[系统错误] ${e.message}`);
+        }
+    });
+}
+
 // Initial status check
 fetch('/api/status').then(res => res.json()).then(data => {
     if(data.is_running) {
@@ -391,7 +469,9 @@ fetch('/api/status').then(res => res.json()).then(data => {
         statusText.textContent = '营销引擎运行中...';
         startTracking();
     } else {
-         statusDot.className = 'dot online';
+        statusDot.className = 'dot online';
+        // Only offer resume when nothing is currently running
+        checkResumableTask();
     }
 }).catch(e => {
     appendLog("无法连接到本地守护进程...");

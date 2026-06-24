@@ -8,6 +8,7 @@ uploads/
 .venv/
 build/
 dist/
+dist_release/
 coversation_history/
 conversation_history/
 *.log
@@ -16,3 +17,7 @@ conversation_history/
 tests/fixtures/*.xlsx
 remotion/**/node_modules/
 remotion/**/out/
+# 本地工具配置（个人 IDE / Agent 配置，不入库）
+.claude/
+# 断点续传检查点（运行时用户数据，随 exe 在本地生成）
+state/

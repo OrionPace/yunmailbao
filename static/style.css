@@ -111,6 +111,36 @@ body {
     box-shadow: 0 0 0 1px rgba(32, 247, 210, 0.05), 0 18px 60px rgba(0, 0, 0, 0.38);
 }
 
+/* Resume banner (断点续传提示) */
+.resume-banner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+    padding: 16px 20px;
+    margin-bottom: 20px;
+    border-left: 4px solid var(--danger);
+}
+.resume-banner-text {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+.resume-banner-text strong {
+    color: var(--danger);
+    font-size: 0.98rem;
+}
+.resume-banner-text span {
+    color: var(--text-secondary, var(--text-primary));
+    font-size: 0.85rem;
+}
+.resume-banner-actions {
+    display: flex;
+    gap: 10px;
+    flex-shrink: 0;
+}
+
 .app-container {
     max-width: 1440px;
     margin: 0 auto;
@@ -633,6 +663,19 @@ input:focus, textarea:focus {
 }
 .doc-warning {
     border-color: rgba(255, 79, 123, 0.35);
+}
+.doc-highlight {
+    border-color: rgba(15, 159, 143, 0.45);
+    border-left: 4px solid var(--accent-emerald, #0f9f8f);
+}
+.doc-credits {
+    border-color: rgba(37, 99, 235, 0.32);
+    background: rgba(37, 99, 235, 0.06);
+}
+:root[data-theme="dark"] .doc-credits {
+    background:
+        linear-gradient(145deg, rgba(32, 247, 210, 0.10), rgba(37, 99, 235, 0.06)),
+        rgba(8, 13, 24, 0.80);
 }
 
 @media (max-width: 1100px) {

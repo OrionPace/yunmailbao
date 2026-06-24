@@ -56,6 +56,19 @@
 
         <!-- Tab: Main Application -->
         <main class="tab-content active" id="tab-home">
+            <!-- Resume banner: shown when an unfinished campaign is detected on disk -->
+            <div class="glass-panel resume-banner" id="resumeBanner" style="display: none;">
+                <div class="resume-banner-text">
+                    <strong>⚠️ 检测到上次未完成的发送任务</strong>
+                    <span id="resumeBannerDetail">已发送 0 / 0，失败 0</span>
+                </div>
+                <div class="resume-banner-actions">
+                    <button type="button" class="btn btn-primary" id="resumeBtn"
+                        data-tooltip="跳过已成功投递的邮箱，从断点继续发送">继续发送</button>
+                    <button type="button" class="btn" id="discardBtn"
+                        data-tooltip="清除上次进度，重新发起一个全新任务">放弃并新建</button>
+                </div>
+            </div>
             <div class="grid-layout">
                 <!-- Left Column: Configurator -->
                 <section class="config-section glass-panel">
@@ -213,76 +226,110 @@
             <div class="glass-panel doc-content">
                 <div class="doc-hero">
                     <div>
-                        <span class="doc-kicker">YUNYOUBAO DOC</span>
-                        <h2>云邮宝操作手册</h2>
-                        <p>从账号配置、名单导入、正文编写到发送监控的一页式说明。适合首次使用，也适合每次正式发送前做快速核对。</p>
+                        <span class="doc-kicker">YUNYOUBAO · 操作手册</span>
+                        <h2>云邮宝使用说明</h2>
+                        <p>云邮宝是一款<strong>本地优先</strong>的批量邮件发送桌面工具，面向培训通知、会议邀约、名单群发等既要规模、又要保留人工可控性的场景。下面按「准备 → 导入 → 撰写 → 发送 → 续传 → 排查」的顺序说明全部用法，首次使用与每次正式群发前都建议对照核查。</p>
                     </div>
                     <div class="doc-status-card">
                         <span>运行模式</span>
                         <strong>本地优先</strong>
-                        <small>账号与日志默认保存在当前机器</small>
+                        <small>账号、日志、发送进度均保存在当前电脑</small>
                     </div>
                 </div>
 
                 <div class="doc-grid">
                     <section class="doc-block">
-                        <h3>1. 准备发件账号</h3>
-                        <p>在“发件人账号池配置”中填写发件人别名、邮箱地址和 SMTP 授权码。授权码不是邮箱登录密码，建议为每个邮箱单独生成。</p>
+                        <h3>1. 准备发件账号与 SMTP 授权码</h3>
+                        <p>在「发件人账号池配置」中按行填写：发件人别名、邮箱地址、SMTP 授权码。<strong>授权码不是邮箱登录密码</strong>，需在邮箱网页端单独开通生成。</p>
                         <ul>
-                            <li>QQ 邮箱默认使用 <code>smtp.qq.com:587</code>。</li>
-                            <li>163 邮箱默认使用 <code>smtp.163.com:465</code>。</li>
-                            <li>正式发送建议准备 2-5 个账号轮换，降低单账号短时间压力。</li>
+                            <li><strong>QQ 邮箱</strong>：网页端 → 设置 → 账号 → 开启「POP3/SMTP 服务」→ 短信验证后获得 16 位授权码；服务器 <code>smtp.qq.com:587</code>。</li>
+                            <li><strong>163 邮箱</strong>：网页端 → 设置 → POP3/SMTP/IMAP → 开启 SMTP → 设置「客户端授权密码」；服务器 <code>smtp.163.com:465</code>。</li>
+                            <li>正式群发建议配置 <strong>2-5 个账号轮换</strong>，系统会按收件人顺序轮流使用，降低单账号短时压力。</li>
+                            <li>点击「+ 继续添加账号」可增加更多发件箱。</li>
                         </ul>
                     </section>
 
                     <section class="doc-block">
                         <h3>2. 导入收件人 Excel</h3>
-                        <p>上传 Excel 后，系统会读取表头并显示“姓名列”和“邮箱列”映射。列名包含“姓名 / name / 邮箱 / email”时会自动预选。</p>
+                        <p>点击或拖拽上传 <code>.xlsx</code> 文件，系统读取表头后显示「姓名列 / 邮箱列」下拉，请分别选中对应列。</p>
+                        <p>数据格式范例（首行必须是表头）：</p>
+                        <ul>
+                            <li><code>姓名 | 邮箱</code></li>
+                            <li><code>张三 | zhangsan@qq.com</code></li>
+                            <li><code>李四 | lisi@163.com</code></li>
+                        </ul>
                         <ul>
                             <li>不要使用合并单元格、隐藏行或空表头。</li>
-                            <li>邮箱列必须是有效邮箱格式。</li>
-                            <li>未选择映射时，系统会回退到第一列姓名、第二列邮箱。</li>
+                            <li>邮箱列必须是有效邮箱，无效或空行会被自动跳过。</li>
+                            <li>未手动选择映射时，默认取第一列为姓名、第二列为邮箱。</li>
+                            <li>示例文件见 <code>tests/fixtures/sample_recipients.xlsx</code>。</li>
                         </ul>
                     </section>
 
                     <section class="doc-block">
                         <h3>3. 编写正文与附件</h3>
-                        <p>富文本编辑器默认空白，避免把示例机构内容误发。正文中可使用 <code>&lt;人名&gt;</code> 占位符，发送时会替换为 Excel 中对应姓名。</p>
+                        <p>富文本编辑器默认空白。正文中可使用 <code>&lt;人名&gt;</code> 占位符，发送时自动替换为该收件人的姓名，实现个性化称呼。</p>
                         <ul>
-                            <li>支持字体、字号、加粗、对齐、列表、颜色和图片。</li>
-                            <li>支持直接粘贴截图到正文中。</li>
-                            <li>附件当前建议使用 PDF，便于收件端打开和归档。</li>
+                            <li>支持字体、字号、行距、加粗、对齐、列表、颜色和图片。</li>
+                            <li>支持直接 <strong>粘贴微信/网页截图</strong> 到正文（内嵌为图片）。</li>
+                            <li>附件建议使用 PDF，便于收件端打开与归档。</li>
+                            <li>正式发送前先给自己发一封自测，确认排版与占位符替换正常。</li>
                         </ul>
                     </section>
 
                     <section class="doc-block">
-                        <h3>4. 设置发送节奏</h3>
-                        <p>发送窗口用于限制每日发件时间，批次和抖动用于控制发送速度。对冷启动账号，建议从保守参数开始。</p>
+                        <h3>4. 设置发送节奏与防封策略</h3>
+                        <p>发送窗口限制每日发件时间段，批次与抖动控制发送速度。冷启动账号务必从保守参数起步。</p>
                         <ul>
-                            <li>窗口开始/结束：只在允许时段发件。</li>
-                            <li>单批次并发：新账号建议设为 <code>1</code>。</li>
-                            <li>最小/最大抖动：建议先用 <code>5-15</code> 秒观察稳定性。</li>
+                            <li><strong>窗口开始 / 结束</strong>：仅在该时段发件，超时自动挂起等待至次日窗口。</li>
+                            <li><strong>单批次并发邮箱数</strong>：新账号建议 <code>1</code>，数值越大越快但越易被大厂封禁。</li>
+                            <li><strong>最小 / 最大抖动（秒）</strong>：每批次之间的随机休眠，建议先用 <code>5-15</code> 秒。</li>
+                            <li><strong>疲劳递增</strong>：累计发送越多，休眠自动越长；配合多账号轮换、隐形字符盐值等手段尽量规避反垃圾网关。</li>
+                        </ul>
+                    </section>
+
+                    <section class="doc-block doc-highlight">
+                        <h3>5. 断点续传（断网 / 关机不怕）</h3>
+                        <p>发送过程中，进度会在每发完一封后<strong>自动保存</strong>到运行目录的 <code>state/checkpoint.json</code>。若期间断网、断电或手动关闭程序：</p>
+                        <ul>
+                            <li>重新打开云邮宝，主控制台顶部会出现「检测到上次未完成任务」的提示横幅。</li>
+                            <li>点击 <strong>「继续发送」</strong>：自动跳过已成功投递的邮箱，仅发送剩余部分，<strong>不会重复发送</strong>。</li>
+                            <li>点击 <strong>「放弃并新建」</strong>：清除上次进度记录（已发出的邮件不受影响），重新发起全新任务。</li>
+                            <li>断电场景最多只会重发最后一封正在处理的邮件。</li>
                         </ul>
                     </section>
 
                     <section class="doc-block">
-                        <h3>5. 监控与失败导出</h3>
-                        <p>右侧控制台会显示总计划、已送达、失败和队列进度。任务结束后，如存在失败记录，可导出失败清单继续排查。</p>
+                        <h3>6. 监控与失败导出</h3>
+                        <p>右侧控制台实时显示总计划、已送达、失败数量与队列进度，并滚动输出日志。</p>
                         <ul>
-                            <li>失败原因会按地址无效、认证失败、反垃圾拦截、连接异常等分类。</li>
-                            <li>安全终止会请求后台停止任务，并关闭 SMTP 连接。</li>
-                            <li>日志文件保存在运行目录的 <code>logs/</code>。</li>
+                            <li>失败原因自动分类：地址不存在、收件箱已满、反垃圾拦截、认证失败、连接超时等。</li>
+                            <li>任务结束后如有失败，点击「导出失败记录」下载 Excel 清单继续排查或二次投递。</li>
+                            <li>「安全终止」会请求后台停止并关闭 SMTP 连接，进度同时落盘可续传。</li>
+                            <li>完整日志保存在运行目录的 <code>logs/email_app.log</code>。</li>
                         </ul>
                     </section>
 
                     <section class="doc-block doc-warning">
-                        <h3>上线前注意</h3>
-                        <p>当前产品适合本地可信环境。部署到公网前，必须补登录鉴权、上传限制、CORS 白名单和操作审计。</p>
+                        <h3>7. 安全与上线前注意</h3>
+                        <p>当前版本面向<strong>本地可信环境</strong>。部署到公网前，必须补登录鉴权、上传限制、CORS 白名单与操作审计。</p>
                         <ul>
-                            <li>阿里云部署和域名备案流程见 <code>docs/deployment-guide.md</code>。</li>
-                            <li>Windows 交付版使用 <code>build.bat</code> 打包。</li>
+                            <li>请勿用于垃圾邮件、钓鱼、骚扰等违法用途，仅用于正常通知与邀约。</li>
                             <li>不要将 <code>.env</code> 或真实授权码提交到 Git。</li>
+                            <li>Windows 交付版用 <code>build.bat</code> 打包；阿里云部署流程见 <code>docs/deployment-guide.md</code>。</li>
                         </ul>
+                    </section>
+
+                    <section class="doc-block doc-credits">
+                        <h3>关于与协作者</h3>
+                        <p>云邮宝由广东省公共卫生研究院培训班营销需求催生，并在多个大模型协作下迭代成型，后续将交接给研究院的研究生继续维护。</p>
+                        <ul>
+                            <li><strong>OuYang Pace（orinpace）</strong> — 发起人 / 产品负责人 / 需求与验收</li>
+                            <li><strong>Claude Sonnet 3.7</strong> — 早期架构与核心引擎实现</li>
+                            <li><strong>GPT 5.5</strong> — 反垃圾策略与功能迭代</li>
+                            <li><strong>Claude Opus 4.8</strong> — 断点续传、文档重写与产品化</li>
+                        </ul>
+                        <p><small>本地优先 · 开源交接版。源码托管于作者的 GitHub 仓库，欢迎后续研究生 Fork 与改进。</small></p>
                     </section>
                 </div>
             </div>
