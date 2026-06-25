@@ -2,8 +2,23 @@
 # PyInstaller spec file for 云邮宝 (AutoEmail)
 
 import os
+import sys
 
 block_cipher = None
+
+# --- 显式绑定与当前 Python 匹配的 OpenSSL DLL ---
+# 该环境基于 conda/Miniforge，_ssl.pyd 依赖的 libcrypto/libssl 位于
+# base_prefix\Library\bin。若不显式指定，PyInstaller 可能从 PATH 上其它
+# conda 环境抓到版本不一致的 DLL，导致打包后报
+# "ImportError: DLL load failed while importing _ssl: 找不到指定的程序"。
+binaries = []
+for _cand in (os.path.join(sys.base_prefix, 'Library', 'bin'),  # conda 布局
+              os.path.join(sys.base_prefix, 'DLLs')):            # 标准 CPython 布局
+    for _dll in ('libcrypto-3-x64.dll', 'libssl-3-x64.dll',
+                 'libcrypto-3.dll', 'libssl-3.dll'):
+        _p = os.path.join(_cand, _dll)
+        if os.path.exists(_p):
+            binaries.append((_p, '.'))
 
 # Collect all data files
 datas = [
@@ -58,7 +73,7 @@ hiddenimports = [
 a = Analysis(
     ['main.py'],
     pathex=[],
-    binaries=[],
+    binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],

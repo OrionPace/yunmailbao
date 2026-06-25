@@ -71,7 +71,37 @@ logger = logging.getLogger("AutoEmailApp")
 engine = MarketingEngine(logger)
 # 注册断点续传检查点路径，并恢复上次未完成任务的进度（供 UI 提示继续）
 engine.set_checkpoint_path(os.path.join(state_dir, "checkpoint.json"))
+engine.set_blacklist_path(os.path.join(state_dir, "blacklist.txt"))
+blacklist_path = os.path.join(state_dir, "blacklist.txt")
 engine.load_checkpoint_into_memory()
+
+
+def parse_senders(senders_text):
+    """解析账户池文本为 senders 列表。格式：别名||||邮箱----授权码（别名可省略）。"""
+    senders = []
+    for line in senders_text.strip().split("\n"):
+        if "----" not in line:
+            continue
+        display_name = ""
+        email_pwd_part = line
+        if "||||" in line:
+            display_name, email_pwd_part = line.split("||||", 1)
+            display_name = display_name.strip()
+        email, pwd = email_pwd_part.split("----", 1)
+        email, pwd = email.strip(), pwd.strip()
+        if not (email and pwd):
+            continue
+        if not display_name:
+            display_name = email.split("@")[0] if "@" in email else email
+        is_qq = "qq.com" in email.lower()
+        senders.append({
+            "email": email,
+            "password": pwd,
+            "name": display_name,
+            "smtp_server": "smtp.qq.com" if is_qq else "smtp.163.com",
+            "smtp_port": 587 if is_qq else 465,
+        })
+    return senders
 
 app = FastAPI(title="AutoEmail AI Marketing")
 
@@ -145,38 +175,10 @@ async def start_campaign(request: dict, background_tasks: BackgroundTasks):
         background_tasks.add_task(engine.run_campaign, resume_cfg, True)
         return JSONResponse(content={"status": "success", "message": "已继续上次未完成的任务"})
 
-    senders_text = config.get("senders_text", "")
-    senders = []
-    lines = senders_text.strip().split("\n")
-    for line in lines:
-        if "----" in line:
-            # Format: name||||email----password  (name part is optional)
-            display_name = ""
-            email_pwd_part = line
-            if "||||" in line:
-                display_name, email_pwd_part = line.split("||||", 1)
-                display_name = display_name.strip()
-            
-            email, pwd = email_pwd_part.split("----", 1)
-            email, pwd = email.strip(), pwd.strip()
-            if email and pwd:
-                # Fallback: use email username if no custom name provided
-                if not display_name:
-                    display_name = email.split("@")[0] if "@" in email else email
-                
-                smtp_srv = "smtp.qq.com" if "qq.com" in email.lower() else "smtp.163.com"
-                smtp_pt = 587 if "qq.com" in email.lower() else 465
-                senders.append({
-                    "email": email,
-                    "password": pwd,
-                    "name": display_name,
-                    "smtp_server": smtp_srv,
-                    "smtp_port": smtp_pt
-                })
-    
+    senders = parse_senders(config.get("senders_text", ""))
     if not senders:
         return JSONResponse(status_code=400, content={"status": "error", "message": "账户池配置格式不正确或为空，请确保使用 邮箱----授权码 格式。"})
-    
+
     config['senders'] = senders
     
     # Pass column mapping to engine
@@ -211,7 +213,9 @@ def get_status():
         "is_running": engine.is_running,
         "progress": engine.progress,
         "logs": engine.logs,
-        "failed_count": len(engine.failed_recipients)
+        "failed_count": len(engine.failed_recipients),
+        "uncertain_count": len(engine.uncertain_recipients),
+        "resendable_count": len(engine.failed_recipients) + len(engine.uncertain_recipients),
     })
 
 @app.get("/api/checkpoint")
@@ -225,8 +229,10 @@ def clear_checkpoint():
     if engine.is_running:
         return JSONResponse(status_code=400, content={"status": "error", "message": "任务正在运行，无法清除进度。"})
     engine._clear_checkpoint()
-    engine.progress = {"total": 0, "sent": 0, "failed": 0, "current": 0}
+    engine.progress = {"total": 0, "sent": 0, "failed": 0, "uncertain": 0, "current": 0,
+                       "eta_seconds": None, "rate_per_min": None, "current_account": ""}
     engine.failed_recipients = []
+    engine.uncertain_recipients = []
     return JSONResponse(content={"status": "success", "message": "已清除上次任务进度"})
 
 @app.get("/api/export-failed")
@@ -248,6 +254,75 @@ def export_failed():
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         filename=f"failed_recipients_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
     )
+
+@app.post("/api/test-send")
+def test_send(request: dict):
+    """群发前先发一封测试邮件到指定邮箱，验证排版与占位符替换。"""
+    senders = parse_senders(request.get("senders_text", ""))
+    if not senders:
+        return JSONResponse(status_code=400, content={"status": "error", "message": "请先配置至少一个发件账号。"})
+    test_email = (request.get("test_email") or "").strip()
+    if not engine.sender_core.validate_email(test_email):
+        return JSONResponse(status_code=400, content={"status": "error", "message": "测试收件邮箱格式不正确。"})
+
+    recipient = {"name": request.get("test_name", "测试用户"), "email": test_email}
+    status, msg = engine.sender_core.send_single(
+        sender=senders[0],
+        recipient=recipient,
+        email_index=1,
+        html_content=request.get("html_content", ""),
+        subject=request.get("subject", "（测试）"),
+        attachment_path=request.get("attachment_path"),
+        add_unsubscribe=bool(request.get("add_unsubscribe", True)),
+    )
+    engine.sender_core.close_all_connections()
+    if status == "success":
+        return JSONResponse(content={"status": "success", "message": f"测试邮件已发送至 {test_email}"})
+    elif status == "uncertain":
+        return JSONResponse(content={"status": "success", "message": f"已尝试发送至 {test_email}，但连接中断、状态未知，请到收件箱确认。"})
+    return JSONResponse(status_code=400, content={"status": "error", "message": f"测试发送失败：{msg}"})
+
+
+@app.post("/api/resend-failed")
+async def resend_failed(background_tasks: BackgroundTasks):
+    """仅对上次失败/待确认的收件人发起一次重发（复用上次任务配置）。"""
+    if engine.is_running:
+        return JSONResponse(status_code=400, content={"status": "error", "message": "任务正在运行中。"})
+    targets = engine.failed_recipients + engine.uncertain_recipients
+    if not targets:
+        return JSONResponse(status_code=400, content={"status": "error", "message": "暂无失败或待确认的收件人可重发。"})
+    base_cfg = engine.active_config or engine.get_resume_config()
+    if not base_cfg:
+        return JSONResponse(status_code=400, content={"status": "error", "message": "找不到上次任务配置，无法重发。请重新发起任务。"})
+
+    cfg = dict(base_cfg)
+    cfg["recipients_override"] = [{"name": t["name"], "email": t["email"]} for t in targets]
+    background_tasks.add_task(engine.run_campaign, cfg, False)
+    return JSONResponse(content={"status": "success", "message": f"已对 {len(targets)} 个失败/待确认收件人发起重发"})
+
+
+@app.get("/api/blacklist")
+def get_blacklist():
+    try:
+        if os.path.exists(blacklist_path):
+            with open(blacklist_path, "r", encoding="utf-8") as f:
+                return JSONResponse(content={"status": "success", "content": f.read()})
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"status": "error", "message": str(e)})
+    return JSONResponse(content={"status": "success", "content": ""})
+
+
+@app.post("/api/blacklist")
+def save_blacklist(request: dict):
+    """保存退订/黑名单（每行一个邮箱），发送时自动排除。"""
+    try:
+        with open(blacklist_path, "w", encoding="utf-8") as f:
+            f.write(request.get("content", ""))
+        count = len(engine.load_blacklist())
+        return JSONResponse(content={"status": "success", "message": f"已保存，黑名单共 {count} 个邮箱"})
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"status": "error", "message": str(e)})
+
 
 def run_server():
     uvicorn.run(app, host="127.0.0.1", port=8123)

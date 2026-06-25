@@ -13,12 +13,17 @@ class MarketingEngine:
         self.sender_core = EmailSenderCore(logger)
         self.is_running = False
         self.logs = []
-        self.progress = {"total": 0, "sent": 0, "failed": 0, "current": 0}
-        self.failed_recipients = []  # Track failed emails for export
+        self.progress = {"total": 0, "sent": 0, "failed": 0, "uncertain": 0, "current": 0,
+                         "eta_seconds": None, "rate_per_min": None, "current_account": ""}
+        self.failed_recipients = []     # Track failed emails for export
+        self.uncertain_recipients = []  # 投递状态未知（连接中断），需人工复查/重试
         # --- Resume / checkpoint state ---
         self.sent_emails = set()        # Emails confirmed delivered (for idempotent skip)
+        self.account_usage = {}         # {email: {"date": "YYYY-MM-DD", "count": N}} 每账号当日发量
         self.checkpoint_path = None     # Set by main.py at startup
+        self.blacklist_path = None      # state/blacklist.txt
         self.active_config = None       # Config of the in-flight / paused campaign
+        self.start_ts = None            # 本轮发送起始时间（用于 ETA 估算）
 
     def _log(self, msg):
         timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -33,8 +38,65 @@ class MarketingEngine:
         self._log("收到停止指令，正在安全终止任务...")
 
     def get_failed_recipients(self):
-        """Return the list of failed recipients for export."""
-        return self.failed_recipients
+        """Return failed + uncertain recipients for export (待确认单独标注原因)。"""
+        return self.failed_recipients + self.uncertain_recipients
+
+    # ------------------------------------------------------------------
+    # Blacklist (退订/黑名单)
+    # ------------------------------------------------------------------
+    def set_blacklist_path(self, path):
+        self.blacklist_path = path
+
+    def load_blacklist(self):
+        """Return a set of lowercased blacklisted emails from state/blacklist.txt."""
+        if not self.blacklist_path or not os.path.exists(self.blacklist_path):
+            return set()
+        try:
+            with open(self.blacklist_path, "r", encoding="utf-8") as f:
+                return {ln.strip().lower() for ln in f if ln.strip() and not ln.startswith("#")}
+        except Exception as e:
+            self.logger.error(f"读取黑名单失败: {e}")
+            return set()
+
+    # ------------------------------------------------------------------
+    # Per-account daily quota (每账号单日发量配额)
+    # ------------------------------------------------------------------
+    def _account_count_today(self, email):
+        today = datetime.date.today().isoformat()
+        rec = self.account_usage.get(email)
+        if not rec or rec.get("date") != today:
+            return 0
+        return rec.get("count", 0)
+
+    def _bump_account(self, email):
+        today = datetime.date.today().isoformat()
+        rec = self.account_usage.get(email)
+        if not rec or rec.get("date") != today:
+            self.account_usage[email] = {"date": today, "count": 1}
+        else:
+            rec["count"] = rec.get("count", 0) + 1
+
+    def _pick_sender(self, senders, i, daily_limit):
+        """Round-robin starting at i, returning the next account still under its
+        daily quota. Returns None when every account is exhausted for today."""
+        n = len(senders)
+        for offset in range(n):
+            cand = senders[(i + offset) % n]
+            if daily_limit <= 0 or self._account_count_today(cand["email"]) < daily_limit:
+                return cand
+        return None
+
+    def _update_eta(self, done_this_run, processed_index, total):
+        """Estimate remaining time from this run's observed throughput."""
+        if not self.start_ts or done_this_run <= 0:
+            return
+        elapsed = time.time() - self.start_ts
+        if elapsed <= 0:
+            return
+        rate_per_sec = done_this_run / elapsed
+        remaining = max(0, total - processed_index)
+        self.progress["rate_per_min"] = round(rate_per_sec * 60, 1)
+        self.progress["eta_seconds"] = int(remaining / rate_per_sec) if rate_per_sec > 0 else None
 
     # ------------------------------------------------------------------
     # Checkpoint / Resume (断点续传)
@@ -56,6 +118,8 @@ class MarketingEngine:
             "total": self.progress.get("total", 0),
             "sent_emails": sorted(self.sent_emails),
             "failed_recipients": self.failed_recipients,
+            "uncertain_recipients": self.uncertain_recipients,
+            "account_usage": self.account_usage,
             "progress": self.progress,
             "updated_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         }
@@ -83,6 +147,7 @@ class MarketingEngine:
     def _clear_checkpoint(self):
         """Discard any saved progress (used by '放弃并新建' and fresh starts)."""
         self.sent_emails = set()
+        self.account_usage = {}
         self.active_config = None
         if self.checkpoint_path and os.path.exists(self.checkpoint_path):
             try:
@@ -121,6 +186,7 @@ class MarketingEngine:
             "total": total,
             "sent": sent,
             "failed": len(cp.get("failed_recipients", [])),
+            "uncertain": len(cp.get("uncertain_recipients", [])),
             "subject": cp.get("config", {}).get("subject", ""),
             "updated_at": cp.get("updated_at", ""),
         }
@@ -140,7 +206,9 @@ class MarketingEngine:
             return
         self.sent_emails = set(cp.get("sent_emails", []))
         self.failed_recipients = cp.get("failed_recipients", [])
-        self.progress = cp.get("progress", {"total": 0, "sent": 0, "failed": 0, "current": 0})
+        self.uncertain_recipients = cp.get("uncertain_recipients", [])
+        self.account_usage = cp.get("account_usage", {})
+        self.progress = cp.get("progress", {"total": 0, "sent": 0, "failed": 0, "uncertain": 0, "current": 0})
         self.active_config = cp.get("config")
 
     @staticmethod
@@ -175,46 +243,70 @@ class MarketingEngine:
         """
         self.is_running = True
         self.active_config = config
+        self.start_ts = time.time()
         if resume:
             cp = self._read_checkpoint()
             if cp:
                 self.sent_emails = set(cp.get("sent_emails", []))
                 self.failed_recipients = list(cp.get("failed_recipients", []))
+                self.uncertain_recipients = list(cp.get("uncertain_recipients", []))
+                self.account_usage = cp.get("account_usage", {})
                 self._log(f"断点续传：已恢复进度，{len(self.sent_emails)} 个邮箱此前已成功投递，将自动跳过。")
             else:
                 self.sent_emails = set()
                 self.failed_recipients = []
+                self.uncertain_recipients = []
+                self.account_usage = {}
         else:
             # Fresh campaign: wipe any previous progress on disk and in memory
             self._clear_checkpoint()
             self.logs.clear()
             self.failed_recipients = []
+            self.uncertain_recipients = []
             self.sent_emails = set()
+            self.account_usage = {}
         self._log("初始化发件营销计划...")
         
         try:
-            # 1. Load Excel
-            df = pd.read_excel(config['excel_path'])
-            
-            # Determine column mapping
             name_col = config.get('name_column', '')
             email_col = config.get('email_column', '')
-            
+
+            # 收件人来源：仅重发失败时用内存名单覆盖，否则从 Excel 读取
+            override = config.get('recipients_override')
             recipients = []
-            for _, row in df.iterrows():
-                # Use column name if provided, otherwise fall back to positional index
-                if name_col and name_col in df.columns:
-                    name = str(row[name_col]).strip() if not pd.isna(row[name_col]) else ''
-                else:
-                    name = str(row.iloc[0]).strip() if not pd.isna(row.iloc[0]) else ''
-                    
-                if email_col and email_col in df.columns:
-                    email = str(row[email_col]).strip() if not pd.isna(row[email_col]) else ''
-                else:
-                    email = str(row.iloc[1]).strip() if not pd.isna(row.iloc[1]) else ''
-                    
-                if name and email and self.sender_core.validate_email(email):
-                    recipients.append({"name": name, "email": email})
+            if override:
+                for r in override:
+                    name = str(r.get("name", "")).strip()
+                    email = str(r.get("email", "")).strip()
+                    if name and email and self.sender_core.validate_email(email):
+                        recipients.append({"name": name, "email": email})
+                self._log(f"仅重发模式：载入 {len(recipients)} 个待重发收件人。")
+            else:
+                # 1. Load Excel
+                df = pd.read_excel(config['excel_path'])
+                for _, row in df.iterrows():
+                    # Use column name if provided, otherwise fall back to positional index
+                    if name_col and name_col in df.columns:
+                        name = str(row[name_col]).strip() if not pd.isna(row[name_col]) else ''
+                    else:
+                        name = str(row.iloc[0]).strip() if not pd.isna(row.iloc[0]) else ''
+
+                    if email_col and email_col in df.columns:
+                        email = str(row[email_col]).strip() if not pd.isna(row[email_col]) else ''
+                    else:
+                        email = str(row.iloc[1]).strip() if not pd.isna(row.iloc[1]) else ''
+
+                    if name and email and self.sender_core.validate_email(email):
+                        recipients.append({"name": name, "email": email})
+
+            # 退订/黑名单排除
+            blacklist = self.load_blacklist()
+            if blacklist:
+                before = len(recipients)
+                recipients = [r for r in recipients if r["email"].lower() not in blacklist]
+                excluded = before - len(recipients)
+                if excluded > 0:
+                    self._log(f"已排除黑名单/退订收件人 {excluded} 个。")
 
             total = len(recipients)
             # On resume, seed counters from restored state so the dashboard and
@@ -224,7 +316,11 @@ class MarketingEngine:
                 "total": total,
                 "sent": already_sent,
                 "failed": len(self.failed_recipients),
+                "uncertain": len(self.uncertain_recipients),
                 "current": already_sent,
+                "eta_seconds": None,
+                "rate_per_min": None,
+                "current_account": "",
             }
 
             if total == 0:
@@ -248,6 +344,9 @@ class MarketingEngine:
             batch_size = int(config.get('batch_size', 1))
             base_min = int(config.get('min_interval', 5))
             base_max = int(config.get('max_interval', 15))
+            daily_limit = int(config.get('daily_limit_per_account', 0) or 0)
+            add_unsubscribe = bool(config.get('add_unsubscribe', True))
+            done_this_run = 0  # 本轮实际尝试发送数（用于 ETA 速率估算）
 
             for i, recipient in enumerate(recipients):
                 if not self.is_running:
@@ -273,26 +372,48 @@ class MarketingEngine:
                     self._save_checkpoint(config, "paused")
                     break
 
-                # Rotate Senders
-                sender = senders[i % len(senders)]
+                # 选择当日未超配额的发件账号；全部超限则暂停（可断点续传）
+                sender = self._pick_sender(senders, i, daily_limit)
+                if sender is None:
+                    self._log(f"⛔ 所有发件账号均已达到单日上限（{daily_limit} 封/账号），任务自动暂停。"
+                              f"请明日继续，或新增发件账号后续传。")
+                    self._save_checkpoint(config, "paused")
+                    self.is_running = False
+                    break
+                self.progress["current_account"] = sender["email"]
 
                 # Send
                 self._log(f"正在发送第 {i+1} 封至 {recipient['email']} (使用账号: {sender['email']})")
-                success, msg = self.sender_core.send_single(
+                status, msg = self.sender_core.send_single(
                     sender=sender,
                     recipient=recipient,
                     email_index=email_index,
                     html_content=config['html_content'],
                     subject=config['subject'],
                     image_path=config.get('image_path'),
-                    attachment_path=config.get('attachment_path')
+                    attachment_path=config.get('attachment_path'),
+                    add_unsubscribe=add_unsubscribe
                 )
 
-                if success:
+                if status == "success":
                     self.progress["sent"] += 1
                     self.sent_emails.add(recipient["email"])
+                    self._bump_account(sender["email"])
                     self._log(f"✅ 发送成功 - {msg}")
-                else:
+                elif status == "uncertain":
+                    # 连接中断，投递状态未知：不计成功、不写入已发集合（续传会重试）
+                    self.progress["uncertain"] += 1
+                    self._bump_account(sender["email"])  # 仍占用账号配额（可能已发出）
+                    self._log(f"⚠️ 投递状态未知（连接中断）→ {recipient['email']} - {msg}")
+                    self.uncertain_recipients.append({
+                        "name": recipient["name"],
+                        "email": recipient["email"],
+                        "reason": "投递状态未知",
+                        "detail": msg,
+                        "time": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        "sender_used": sender["email"]
+                    })
+                else:  # failed
                     self.progress["failed"] += 1
                     reason = self._classify_error(msg)
                     self._log(f"❌ 发送失败 [{reason}] → {recipient['email']} - {msg}")
@@ -304,6 +425,10 @@ class MarketingEngine:
                         "time": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                         "sender_used": sender["email"]
                     })
+
+                # ETA 估算：本轮已处理数 / 已耗时 → 速率 → 剩余时间
+                done_this_run += 1
+                self._update_eta(done_this_run, i + 1, total)
 
                 # 每发完一封即原子化落盘，断网/断电最多只丢失/重发一封
                 self._save_checkpoint(config, "running")
@@ -343,8 +468,9 @@ class MarketingEngine:
         self._log("所有 SMTP 连接已安全关闭。")
 
         # Summary report
-        if self.failed_recipients:
-            self._log(f"⚠️ 本次共有 {len(self.failed_recipients)} 个邮箱投递失败，可点击「导出失败记录」按钮下载清单。")
+        if self.failed_recipients or self.uncertain_recipients:
+            self._log(f"⚠️ 本次失败 {len(self.failed_recipients)} 个、待确认 {len(self.uncertain_recipients)} 个，"
+                      f"可点击「导出失败记录」下载清单，或「重发失败/待确认」一键重试。")
 
         self.is_running = False
         self._log("营销计划执行完毕。")

@@ -33,7 +33,8 @@
 | --- | --- |
 | `logs/` | 运行日志 `email_app.log` |
 | `uploads/` | 用户上传的 Excel / 附件 |
-| `state/checkpoint.json` | **断点续传检查点**（每发一封原子落盘） |
+| `state/checkpoint.json` | **断点续传检查点**（每发一封原子落盘，含每账号当日用量、待确认名单） |
+| `state/blacklist.txt` | 退订/黑名单（每行一个邮箱，发送时自动排除） |
 | `.env` | SMTP 账号与授权码（首次运行从 `.env.example` 生成） |
 
 ## 3. 核心开发规范

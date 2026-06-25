@@ -143,7 +143,7 @@
                         </div>
 
                         <!-- Time Constraints -->
-                        <h3 class="subsection-title">发件引擎与防防封策略</h3>
+                        <h3 class="subsection-title">发件引擎与防封策略</h3>
                         <div class="form-row">
                             <div class="form-group" data-tooltip="避免深夜发件，设定每日自动发送的起始时间">
                                 <label>窗口开始</label>
@@ -155,8 +155,8 @@
                             </div>
                         </div>
                         <div class="form-row">
-                            <div class="form-group" data-tooltip="并发批量（如 1 则表示单个轮询发件）。数越大发得越快，但也越容易被大厂封禁！">
-                                <label>单批次并发邮箱数 (1-50)</label>
+                            <div class="form-group" data-tooltip="串行发送：发完这么多封后休眠一次（并非并行）。数越大节奏越紧凑，但越容易被大厂封禁！">
+                                <label>每批发送数 (1-50)</label>
                                 <input type="number" id="batchSize" value="1" min="1" max="50">
                             </div>
                             <div class="form-group" data-tooltip="发完单批次后的最短随机休眠">
@@ -168,10 +168,46 @@
                                 <input type="number" id="maxInterval" value="15">
                             </div>
                         </div>
+                        <div class="form-row">
+                            <div class="form-group flex-1" data-tooltip="每个发件账号每天最多发多少封，达到即自动跳过该账号；全部账号用尽则暂停（可续传）。0 = 不限制">
+                                <label>单账号单日上限 (0=不限)</label>
+                                <input type="number" id="dailyLimit" value="0" min="0">
+                            </div>
+                            <div class="form-group flex-1" data-tooltip="自动添加 List-Unsubscribe 退订头与正文退订说明，可降低投诉、提升送达率">
+                                <label>退订信息</label>
+                                <label class="checkbox-line">
+                                    <input type="checkbox" id="addUnsubscribe" checked>
+                                    <span>添加退订入口（推荐）</span>
+                                </label>
+                            </div>
+                        </div>
+
+                        <!-- Blacklist / Unsubscribe list -->
+                        <details class="form-group blacklist-box" data-tooltip="名单中命中黑名单的邮箱在发送时会被自动排除">
+                            <summary><strong>退订 / 黑名单</strong>（每行一个邮箱，自动排除）</summary>
+                            <textarea id="blacklistText" rows="3" placeholder="someone@example.com&#10;another@example.com"
+                                style="width:100%;margin-top:8px;padding:10px 14px;background:var(--bg-surface);border:1px solid var(--border-color);border-radius:var(--radius-sm);color:var(--text-primary);font-family:inherit;resize:vertical;"></textarea>
+                            <button type="button" class="btn" id="saveBlacklistBtn"
+                                style="margin-top:8px;padding:6px 12px;font-size:0.85rem;background:var(--bg-surface);color:var(--text-primary);border:1px solid var(--border-color);">保存黑名单</button>
+                        </details>
+
+                        <!-- Test send -->
+                        <div class="form-row" data-tooltip="正式群发前，先发一封到自己的邮箱核对排版与占位符替换">
+                            <div class="form-group flex-1">
+                                <label for="testEmail"><strong>测试发送</strong></label>
+                                <input type="text" id="testEmail" placeholder="填入你自己的邮箱，先收一封确认效果">
+                            </div>
+                        </div>
 
                         <!-- Actions -->
                         <div class="action-bar">
                             <button type="button" class="btn btn-primary btn-send" id="startBtn">发送</button>
+                            <button type="button" class="btn" id="previewBtn"
+                                data-tooltip="预览正文（用示例姓名替换占位符）"
+                                style="background:var(--bg-surface);color:var(--text-primary);border:1px solid var(--border-color);">预览</button>
+                            <button type="button" class="btn" id="testSendBtn"
+                                data-tooltip="发送一封测试邮件到上面填写的测试邮箱"
+                                style="background:var(--bg-surface);color:var(--text-primary);border:1px solid var(--border-color);">测试发送</button>
                             <button type="button" class="btn btn-danger" id="stopBtn" disabled
                                 data-tooltip="发送终止信号至后台">安全终止</button>
                         </div>
@@ -180,7 +216,7 @@
 
                 <!-- Right Column: Status & Logs -->
                 <section class="dashboard-section">
-                    <div class="metrics-grid">
+                    <div class="metrics-grid metrics-grid-4">
                         <div class="metric-card glass-panel" data-tooltip="Excel识别出的总收件人数">
                             <h3>总计划</h3>
                             <div class="metric-val" id="valTotal">0</div>
@@ -189,9 +225,13 @@
                             <h3>已送达</h3>
                             <div class="metric-val" id="valSent">0</div>
                         </div>
-                        <div class="metric-card glass-panel text-danger" data-tooltip="由于频繁被拉黑或格式错误失败的数量">
+                        <div class="metric-card glass-panel text-danger" data-tooltip="认证失败、地址不存在、被拦截等明确失败的数量">
                             <h3>失败</h3>
                             <div class="metric-val" id="valFailed">0</div>
+                        </div>
+                        <div class="metric-card glass-panel text-warning" data-tooltip="连接中断导致投递状态未知，需人工复查或重发，不会被当作成功">
+                            <h3>待确认</h3>
+                            <div class="metric-val" id="valUncertain">0</div>
                         </div>
                     </div>
 
@@ -203,15 +243,22 @@
                         <div class="progress-track">
                             <div class="progress-fill" id="progressBar"></div>
                         </div>
+                        <div class="progress-eta" id="progressEta"></div>
                     </div>
 
                     <div class="glass-panel logs-panel">
                         <div class="logs-header">
                             <h3>实时控制台记录</h3>
-                            <button class="btn btn-export" id="exportFailedBtn" style="display: none;"
-                                data-tooltip="导出所有投递失败的邮箱为 Excel 文件">
-                                📥 导出失败记录 (<span id="failedCountBadge">0</span>)
-                            </button>
+                            <div class="logs-header-actions">
+                                <button class="btn btn-export" id="resendFailedBtn" style="display: none;"
+                                    data-tooltip="仅对失败/待确认的收件人重新发送一次">
+                                    🔁 重发失败/待确认
+                                </button>
+                                <button class="btn btn-export" id="exportFailedBtn" style="display: none;"
+                                    data-tooltip="导出所有失败/待确认的邮箱为 Excel 文件">
+                                    📥 导出记录 (<span id="failedCountBadge">0</span>)
+                                </button>
+                            </div>
                         </div>
                         <div class="terminal-logs" id="logContainer">
                             <div class="log-line text-muted">Awaiting system initialization...</div>
@@ -273,7 +320,8 @@
                             <li>支持字体、字号、行距、加粗、对齐、列表、颜色和图片。</li>
                             <li>支持直接 <strong>粘贴微信/网页截图</strong> 到正文（内嵌为图片）。</li>
                             <li>附件建议使用 PDF，便于收件端打开与归档。</li>
-                            <li>正式发送前先给自己发一封自测，确认排版与占位符替换正常。</li>
+                            <li><strong>「预览」</strong>按钮：用示例姓名替换占位符，群发前先看排版效果。</li>
+                            <li><strong>「测试发送」</strong>：填入自己的邮箱先收一封，确认排版与占位符替换正常——强烈建议每次群发前必做。</li>
                         </ul>
                     </section>
 
@@ -282,8 +330,11 @@
                         <p>发送窗口限制每日发件时间段，批次与抖动控制发送速度。冷启动账号务必从保守参数起步。</p>
                         <ul>
                             <li><strong>窗口开始 / 结束</strong>：仅在该时段发件，超时自动挂起等待至次日窗口。</li>
-                            <li><strong>单批次并发邮箱数</strong>：新账号建议 <code>1</code>，数值越大越快但越易被大厂封禁。</li>
+                            <li><strong>每批发送数</strong>：发完这么多封后休眠一次（<strong>串行发送，并非并行</strong>），新账号建议 <code>1</code>，数值越大节奏越紧凑但越易被封。</li>
                             <li><strong>最小 / 最大抖动（秒）</strong>：每批次之间的随机休眠，建议先用 <code>5-15</code> 秒。</li>
+                            <li><strong>单账号单日上限</strong>：每个账号每天最多发多少封，达到即自动跳过该账号；全部账号用尽则自动暂停（可续传）。QQ/163 个人邮箱有日发量限制，建议设保守值（如每账号 200~300）。<code>0</code> 表示不限制。</li>
+                            <li><strong>退订信息</strong>：勾选后自动添加 List-Unsubscribe 退订头与正文退订说明，降低投诉、提升送达率。</li>
+                            <li><strong>退订 / 黑名单</strong>：把退订或不再联系的邮箱逐行填入并保存，发送时自动排除。</li>
                             <li><strong>疲劳递增</strong>：累计发送越多，休眠自动越长；配合多账号轮换、隐形字符盐值等手段尽量规避反垃圾网关。</li>
                         </ul>
                     </section>
@@ -300,11 +351,13 @@
                     </section>
 
                     <section class="doc-block">
-                        <h3>6. 监控与失败导出</h3>
-                        <p>右侧控制台实时显示总计划、已送达、失败数量与队列进度，并滚动输出日志。</p>
+                        <h3>6. 监控、待确认与失败重发</h3>
+                        <p>右侧控制台实时显示总计划、已送达、失败、<strong>待确认</strong>四项指标，进度条旁显示预计剩余时间、当前账号与发送速率。</p>
                         <ul>
+                            <li><strong>待确认</strong>：连接中断导致投递状态未知的邮件（既不算成功也不算失败），续传/重发时会自动重试，避免静默漏发。</li>
                             <li>失败原因自动分类：地址不存在、收件箱已满、反垃圾拦截、认证失败、连接超时等。</li>
-                            <li>任务结束后如有失败，点击「导出失败记录」下载 Excel 清单继续排查或二次投递。</li>
+                            <li><strong>「导出记录」</strong>：把失败 + 待确认的邮箱导出为 Excel 清单。</li>
+                            <li><strong>「重发失败/待确认」</strong>：一键仅对失败和待确认的收件人再发一次，无需重建任务。</li>
                             <li>「安全终止」会请求后台停止并关闭 SMTP 连接，进度同时落盘可续传。</li>
                             <li>完整日志保存在运行目录的 <code>logs/email_app.log</code>。</li>
                         </ul>
@@ -335,6 +388,19 @@
             </div>
         </main>
 
+    </div>
+
+    <!-- Preview Modal -->
+    <div class="modal-overlay" id="previewModal" style="display:none;">
+        <div class="glass-panel modal-box">
+            <div class="modal-head">
+                <h3>正文预览（示例姓名：张三）</h3>
+                <button type="button" class="btn" id="previewCloseBtn"
+                    style="padding:4px 12px;background:var(--bg-surface);color:var(--text-primary);border:1px solid var(--border-color);">关闭</button>
+            </div>
+            <div class="modal-subject" id="previewSubject"></div>
+            <div class="modal-body-render" id="previewBody"></div>
+        </div>
     </div>
 
     <!-- Scripts -->

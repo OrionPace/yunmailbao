@@ -508,8 +508,34 @@ input:focus, textarea:focus {
 .metric-val { font-size: 2rem; font-weight: 700; color: var(--text-primary); }
 .text-emerlad { color: var(--accent-emerald); }
 .text-danger { color: var(--danger); }
+.text-warning .metric-val { color: #d98a00; }
+:root[data-theme="dark"] .text-warning .metric-val { color: #ffc24b; }
+.metrics-grid-4 { grid-template-columns: repeat(4, 1fr); }
+.metrics-grid-4 .metric-card { padding: 16px 12px; }
+.metrics-grid-4 .metric-val { font-size: 1.7rem; }
 
 /* Progress */
+.progress-eta { margin-top: 10px; font-size: 0.78rem; color: var(--text-secondary); min-height: 1em; }
+.logs-header-actions { display: flex; gap: 8px; align-items: center; }
+.checkbox-line { display: flex; align-items: center; gap: 8px; font-weight: 400; font-size: 0.9rem; cursor: pointer; padding-top: 6px; }
+.checkbox-line input { width: auto; }
+.blacklist-box { border: 1px solid var(--border-color); border-radius: var(--radius-sm); padding: 12px 14px; }
+.blacklist-box summary { cursor: pointer; font-size: 0.9rem; color: var(--text-secondary); }
+
+/* Preview modal */
+.modal-overlay {
+    position: fixed; inset: 0; z-index: 1000;
+    background: rgba(10, 16, 28, 0.55);
+    backdrop-filter: blur(4px);
+    display: flex; align-items: center; justify-content: center;
+    padding: 24px;
+}
+.modal-box { width: min(720px, 92vw); max-height: 86vh; display: flex; flex-direction: column; padding: 20px 24px; }
+.modal-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+.modal-head h3 { margin: 0; font-size: 1rem; color: var(--text-primary); }
+.modal-subject { font-weight: 600; color: var(--text-primary); padding: 8px 0; border-bottom: 1px solid var(--border-color); margin-bottom: 12px; }
+.modal-body-render { overflow: auto; background: #fff; color: #1a1a1a; padding: 18px; border-radius: var(--radius-sm); line-height: 1.7; }
+
 .progress-panel { padding: 24px; }
 .progress-info { display: flex; justify-content: space-between; margin-bottom: 12px; font-size: 0.9rem; font-weight: 500; }
 .progress-track { height: 8px; background: var(--border-color); border-radius: 4px; overflow: hidden; }
@@ -707,8 +733,9 @@ input:focus, textarea:focus {
         overflow: visible;
     }
 
-    .metrics-grid {
-        grid-template-columns: repeat(3, minmax(0, 1fr));
+    .metrics-grid,
+    .metrics-grid-4 {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
     }
 }
 
