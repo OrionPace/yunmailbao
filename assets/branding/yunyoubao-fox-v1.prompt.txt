@@ -1,0 +1,9 @@
+Use case: logo-brand.
+Asset type: a production app icon and original mascot for YunYouBao, a friendly open-source Windows email application.
+Primary request: Create ONE polished square icon showing a cute baby arctic fox made of soft cloud-like white shapes, gently hugging a turquoise email envelope. A tiny coral heart-shaped postage mark on the envelope is a subtle affectionate detail. The fox is the brand character, the envelope immediately conveys email.
+Scene/backdrop: genuinely transparent background, clean isolated icon, no square background plate, no scene.
+Subject: one original white fox with unmistakable softly pointed fox ears, a compact fluffy cloud-shaped tail, small dark eyes and nose, a calm delighted expression, two little paws visibly hugging the envelope. The face and envelope must be the dominant clear shapes. White fur with restrained cool grey shading and a dark charcoal outline that reads well on both white and dark interfaces. Soft turquoise envelope consistent with the application's cyan accents, tiny coral heart. Adorable but tasteful and suitable for a useful productivity application.
+Style/medium: refined flat illustrative mascot app icon, vector-like clean contours rendered as a high-quality bitmap, broad simple shapes, minimal soft shading, warm personality. Avoid a detailed painting or realistic fur.
+Composition/framing: square canvas; one large centered compact silhouette, all ears/paws/tail fully visible, consistent safe margin of about 8%; should remain recognizable at 32 and 48 pixels. Strong face-envelope hierarchy; no miniature incidental elements.
+Text: none.
+Constraints: actual transparent alpha; no words or letters, no watermark, no mockup, no grid of alternatives, no floating decorations, no neon glow, no background gradient. Original character, no recognizable existing software logos or branded mascots. Deliver a single finished icon, not an icon presentation sheet.
