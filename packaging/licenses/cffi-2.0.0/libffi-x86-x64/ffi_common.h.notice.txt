@@ -1,0 +1,6 @@
+/* -----------------------------------------------------------------------
+   ffi_common.h - Copyright (c) 1996  Red Hat, Inc.
+
+   Common internal definitions and macros. Only necessary for building
+   libffi.
+   ----------------------------------------------------------------------- */

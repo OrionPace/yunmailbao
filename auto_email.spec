@@ -23,7 +23,10 @@ for _cand in (os.path.join(sys.base_prefix, 'Library', 'bin'),  # conda 布局
 # Collect all data files
 datas = [
     ('static', 'static'),           # Frontend UI files
-    ('.env.example', '.'),          # Example env file (will be copied to runtime dir on first run)
+    ('assets', 'assets'),
+    ('LICENSE', '.'),
+    ('THIRD_PARTY_NOTICES.md', '.'),
+    ('packaging/licenses', 'packaging/licenses'),
 ]
 
 # Add core module as data since it's imported at runtime
@@ -101,18 +104,18 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name='云邮宝',
+    name='YunYouBao',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    upx=False,
     console=False,          # Hide console window
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon='assets/icon.ico' if os.path.exists('assets/icon.ico') else None,
+    icon='assets/branding/yunyoubao-fox-v1.ico',
 )
 
 coll = COLLECT(
@@ -121,7 +124,7 @@ coll = COLLECT(
     a.zipfiles,
     a.datas,
     strip=False,
-    upx=True,
+    upx=False,
     upx_exclude=[],
-    name='云邮宝',
+    name='YunYouBao',
 )
