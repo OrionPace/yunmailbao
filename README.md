@@ -94,6 +94,8 @@ node tests/browser/installed.cjs "$env:LOCALAPPDATA/Programs/YunYouBao/YunYouBao
 
 启动失败已定位并修复：原安装器的 `runtime\*` 排除规则误排了 `_internal/pythonnet/runtime/Python.Runtime.dll`，不是用户需要另装 Python；现在只排除锚定的个人数据目录，并增加完整安装文件验证。
 
+远端 Windows/Python 3.12.10 检查还发现未闭合 script/style 内容可能吞掉退订提示；已改为独立解析退订片段，未降低测试断言。当前源码与安装候选均保留此修复，本机通过不代替跨环境 CI。
+
 工作区已删除可再生成的旧 `build/`、`.build_candidate/`、`dist_candidate/`、根 Python 缓存、空 `logs/` / `state/` / `uploads/` 及重复烟测安装包。以后构建暂存统一位于 `.build/`，测试产物在 `tests/artifacts/`，运行数据在 `.runtime/`；这些目录和本地 `release/` 均不进 Git。历史 `dist/`、`dist_release/`、根 `.env`、本地开发环境和既有用户数据仍保留。后续补丁版本可改为 `0.2.1`；同步 `main.py` 的 `VERSION`，一致性测试会防止两者不一致。通过发布验收后再创建版本 tag 和 GitHub Release，不将重复候选当成新正式版本。
 
 ## 界面截图

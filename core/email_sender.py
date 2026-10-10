@@ -266,8 +266,12 @@ def render_email(subject, html_content, recipient, sender, add_unsubscribe=True)
             '\u5982\u4e0d\u613f\u518d\u6536\u5230\u6b64\u7c7b\u90ae\u4ef6\uff0c\u8bf7\u56de\u590d\u672c\u90ae\u4ef6\u5e76\u6ce8\u660e\u201c\u9000\u8ba2\u201d\uff0c\u6216'
             f'<a href="{html.escape(uri, quote=True)}">\u53d1\u9000\u8ba2\u90ae\u4ef6\u81f3 {html.escape(address)}</a>\u3002</p>'
         )
-        parser.feed(footer)
-        parser.close()
+        # A closed parser may retain script/style CDATA state on older Python patches.
+        footer_parser = _EmailHTML()
+        footer_parser.feed(footer)
+        footer_parser.close()
+        parser.output.extend(footer_parser.output)
+        parser.text.extend(footer_parser.text)
     content = "".join(parser.output)
     if len(content.encode("utf-8")) > MAX_MESSAGE_BYTES:
         raise ValueError("Email content exceeds the total size limit")

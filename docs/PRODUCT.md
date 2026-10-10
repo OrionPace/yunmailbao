@@ -17,6 +17,8 @@
 
 已确认的安装缺陷：旧安装目录缺少 `_internal/pythonnet/runtime/Python.Runtime.dll`，但候选目录存在同一 DLL。`packaging/yunyoubao.iss` 的非锚定 `runtime\*` 把依赖运行库当成个人数据排除了；[Inno 官方规则](https://jrsoftware.org/ishelp/topic_filessection.htm) 明确说明无前导反斜线的规则可匹配嵌套路径。已改为锚定排除，并用 `tests/browser/installed.cjs` 复现旧安装失败、验证修复后全部文件及真实窗口。目录选择此前被 `DisableDirPage=yes` 关闭，已开启；英文 GPL 首屏已替换为中文导读，另有中文知情说明，GPL 原文保持不变。
 
+首次远端 CI 还在 Python 3.12.10 复现了未闭合 `script/style` 吞掉退订纯文本的问题，本机 3.12.12 未复现；`core/email_sender.py:render_email` 已改为使用独立解析器处理退订段落，不复用正文解析器的残留状态，保留原回归断言。证据为 `tests/test_email_sender.py:test_unclosed_script_and_tags_cannot_swallow_unsubscribe_footer` 和 [首次 CI 日志](https://github.com/OrionPace/auto_email/actions/runs/38026320167)。
+
 已清理的均为可再生成产物或空目录：旧 `build/`、`.build_candidate/`、`dist_candidate/`、根 Python 缓存、空 `logs/` / `state/` / `uploads/` 和重复烟测包。构建暂存改为 `.build/`，测试产物留在 `tests/artifacts/`，安装包按 `release/<版本>/` 保存，旧候选归档而非覆盖。历史 `dist/`、`dist_release/`、`.env`、开发环境及运行数据库保留；不把可能含凭据或名单的旧成品当作可公开发布物。
 
 “服务器已接收”只表示 SMTP 接受提交，不证明已送达、已阅读或未进垃圾箱。退订为回复/mailto 与人工排除，不是自动一键退订。历史包或 Git 历史曾包含敏感字段的风险不会因新实现自动消失，授权码轮换须由持有人完成；本轮不删除旧数据、不改写历史、不发送真实邮件。
