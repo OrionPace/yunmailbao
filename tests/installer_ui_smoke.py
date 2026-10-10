@@ -7,19 +7,19 @@ import subprocess
 import sys
 import time
 
-from PIL import ImageGrab
-
-
 def run():
     user = ctypes.WinDLL("user32", use_last_error=True)
+    user.SetProcessDPIAware()
     callback = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
     user.EnumWindows.argtypes = [callback, wintypes.LPARAM]
     user.EnumChildWindows.argtypes = [wintypes.HWND, callback, wintypes.LPARAM]
     user.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
     user.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+    user.GetClassNameW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+    user.GetWindow.argtypes = [wintypes.HWND, wintypes.UINT]
+    user.GetWindow.restype = wintypes.HWND
     user.SendMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
     user.SendMessageW.restype = wintypes.LPARAM
-    user.GetWindowRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
     user.PostMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
     user.IsWindowVisible.argtypes = [wintypes.HWND]
     output = Path(__file__).parent / "artifacts" / "installer-ui"
@@ -44,15 +44,15 @@ def run():
         return found
 
     def click(items, text):
-        matches = [handle for handle, title in items if text in title]
+        matches = []
+        for handle, title in items:
+            kind = ctypes.create_unicode_buffer(256)
+            user.GetClassNameW(handle, kind, len(kind))
+            if text in title and "button" in kind.value.lower():
+                matches.append(handle)
         assert matches, f"Missing wizard control: {text}"
         user.SendMessageW(matches[0], 0x00F5, 0, 0)
         time.sleep(0.25)
-
-    def screenshot(window, name):
-        rect = wintypes.RECT()
-        assert user.GetWindowRect(window, ctypes.byref(rect))
-        ImageGrab.grab(bbox=(rect.left, rect.top, rect.right, rect.bottom)).save(output / name)
 
     window = None
     try:
@@ -83,14 +83,20 @@ def run():
             click(items, "下一步")
         assert "GPL" in content and "授权" in content, "Chinese licence explanation missing"
         assert "用户数据" in content and "垃圾" in content, "Chinese data/send boundaries missing"
-        screenshot(window, "01-chinese-licence.png")
+        (output / "licence-text.txt").write_text(content, encoding="utf-8")
         click(items, "我同意")
         click(children(window), "下一步")
         items = children(window)
         content = "\n".join(text for _, text in items)
-        assert "目标" in content and "浏览" in content, "Directory selection page missing"
+        if "知情说明" in content:
+            assert "本地存储" in content and "卸载保留数据" in content
+            (output / "data-notice-text.txt").write_text(content, encoding="utf-8")
+            click(items, "下一步")
+            items = children(window)
+            content = "\n".join(text for _, text in items)
+        (output / "wizard-text.txt").write_text(content, encoding="utf-8")
+        assert "目标" in content and "浏览" in content, "Directory selection page missing: " + content[:1500]
         assert "YunYouBao" in content, "Default directory missing"
-        screenshot(window, "02-directory-selection.png")
         print("PASS: real Chinese licence page and selectable installation directory; no installation requested")
     finally:
         if window:
@@ -99,6 +105,8 @@ def run():
             # Close only the cancellation confirmation owned by this installer.
             @callback
             def dismiss(handle, _):
+                if user.GetWindow(handle, 4) != window:
+                    return True
                 items = children(handle)
                 if any("退出" in text and "安装" in text for _, text in items):
                     matches = [item for item, text in items if "是" in text]

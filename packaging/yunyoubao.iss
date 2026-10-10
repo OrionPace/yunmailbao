@@ -10,7 +10,9 @@
 #ifndef ReleaseDir
   #define ReleaseDir SourcePath + "\..\release\" + AppVersion
 #endif
-#define AppName "云邮宝"
+#ifndef AppName
+  #define AppName "云邮宝"
+#endif
 #define AppExe "YunYouBao.exe"
 
 [Setup]
