@@ -1,323 +1,71 @@
-# 云邮宝部署与域名上线手册
+# 本地运行与远程演练
 
-更新时间：2026-04-25
+**本版不支持公网部署。** 不要将应用端口暴露到公网或局域网，不放行旧版 8123，也不以 Nginx/域名/HTTPS 代替登录与权限设计。启动会话令牌及 Host/Origin 校验服务于本机边界，不是公网用户认证。
 
-这份文档按“第一次把项目部署到服务器并绑定域名”的路径写。当前项目本质是本地桌面工具：`main.py` 同时包含 FastAPI 后端和 pywebview 桌面窗口。部署到阿里云 ECS 时，不要运行桌面窗口，而是用 `uvicorn main:app` 只启动 Web 服务。
+当前主要交付形态为 Windows 当前用户安装 EXE；`0.2.0` 的工件测试仍在进行，以下是当前实现的运行方式，不是已完成安装验收的声明。
 
-## 0. 先确定上线目标
+## Windows 桌面
 
-推荐分两阶段走：
+使用已验收版本的安装器前，核对随包 `SHA256SUMS.txt` 和 `build-manifest.json`。当前候选为未签名构建。
 
-1. 低风险演练：先用 ECS 公网 IP 访问，例如 `http://服务器IP:8123`，确认代码、端口、安全组、环境变量和日志目录都正常。
-2. 域名正式访问：再购买或绑定域名，配置 DNS、备案、HTTPS 和反向代理。
+- 当前用户安装位置：`%LOCALAPPDATA%\Programs\YunYouBao`，无需管理员权限。
+- 数据根目录：`%LOCALAPPDATA%\YunYouBao`，分别使用 `live\` / `demo\`。
+- 需要 Microsoft Edge WebView2 Runtime；缺失时安装器提示官方获取途径，不自动下载安装。
+- 升级/卸载前关闭应用，卸载保留用户数据。安装和卸载行为仍须在实际候选工件上验收。
 
-如果 ECS 是中国内地节点，并且要用域名对外访问，必须完成 ICP 备案。阿里云官方说明：使用中国内地阿里云资源时，需要通过备案流程；如果资源在中国香港或海外节点，则通常不需要 ICP 备案。参考：阿里云 ICP 备案流程与所需资料文档。
+授权码在应用内配置，不编辑安装目录 `.env`。Windows 记住授权码使用当前用户 DPAPI；跨设备或恢复备份后应重新填写。DPAPI 不保护名单、正文和整个数据库，数据目录与备份不能当公开附件分发。
 
-## 1. 免费域名和低成本域名怎么选
+## 源码演示
 
-### 方案 A：完全不买域名，先用公网 IP
+仓库根目录 PowerShell：
 
-成本最低，适合你现在“走完整开发部署流程”的试验阶段。
-
-步骤：
-
-1. 阿里云 ECS 控制台复制公网 IP。
-2. ECS 安全组放行端口：先放行 `22`、`80`、`443`，如果临时直连测试再放行 `8123`。
-3. 服务器运行 `uvicorn main:app --host 0.0.0.0 --port 8123`。
-4. 浏览器访问 `http://公网IP:8123`。
-
-缺点：没有好记的地址，没有 HTTPS 证书体验，也不适合长期公开。
-
-### 方案 B：免费二级域名
-
-GitHub Pages 和 Cloudflare Pages 都提供免费平台子域名，例如 `项目名.github.io` 或 `项目名.pages.dev`。但它们主要适合静态站点。云邮宝有 FastAPI 后端、文件上传、日志和 SMTP 发送，不是纯静态站。
-
-可用方式：
-
-1. 只部署产品介绍页、文档页或演示静态页面到 GitHub Pages / Cloudflare Pages。
-2. 后端仍部署在 ECS，用 IP 或另一个域名访问 API。
-
-不建议把当前项目直接塞进 Pages，因为动态接口不会运行。
-
-### 方案 C：低成本自有域名
-
-如果 ECS 在中国内地，建议优先在阿里云中国站或其他支持备案的国内注册商购买域名，后续备案最省心。阿里云域名注册流程通常是：创建信息模板、查询域名、下单支付、完成实名认证。
-
-如果只是海外节点或学习用，不走中国内地备案，可以考虑 Cloudflare Registrar。Cloudflare 官方说明它按注册局成本价收费、无加价，并包含 DNS、SSL、WHOIS 信息隐藏等能力。注意：海外注册商购买的域名未必适合中国内地备案，请以阿里云备案系统当时校验结果为准。
-
-实用建议：
-
-1. 试验阶段：先不买域名，使用公网 IP。
-2. 想练完整“域名 + DNS + HTTPS”：买便宜后缀，首年低价即可，但一定看续费价。
-3. 要部署到阿里云中国内地 ECS：优先选择能顺利备案的域名注册商和后缀。
-
-## 2. 阿里云 ECS 部署步骤
-
-以下以 Ubuntu 服务器为例。
-
-### 2.1 准备服务器
-
-1. 登录阿里云 ECS 控制台。
-2. 创建或使用已有实例，系统建议 Ubuntu 22.04/24.04 LTS。
-3. 安全组放行：
-   - `22/tcp`：SSH 登录。
-   - `80/tcp`：HTTP。
-   - `443/tcp`：HTTPS。
-   - `8123/tcp`：仅临时调试用，正式部署后关闭。
-4. SSH 登录服务器：
-
-```bash
-ssh root@你的服务器公网IP
+```powershell
+uv sync --locked
+$env:YUNYOUBAO_DATA_DIR = Join-Path $env:TEMP "YunYouBao-demo"
+uv run python main.py --demo
 ```
 
-### 2.2 安装运行环境
+无桌面窗口的浏览器演示：
 
-```bash
-apt update
-apt install -y git curl nginx
-curl -LsSf https://astral.sh/uv/install.sh | sh
-source ~/.bashrc
+```powershell
+uv run python main.py --headless --demo --port 8131
+# 已有虚拟环境时
+.\.venv\Scripts\python.exe main.py --headless --demo --port 8131
 ```
 
-### 2.3 拉取项目并安装依赖
+浏览器访问 `http://127.0.0.1:8131`。headless 固定监听 loopback；桌面模式选择动态本地端口，`--port` 不影响桌面窗口。不设置数据环境变量时源码使用 `.runtime\dev`。
 
-```bash
-mkdir -p /opt/apps
-cd /opt/apps
-git clone 你的仓库地址 auto_email
-cd auto_email
-uv sync
+`--demo` 仅设初始模式，界面可切换正式模式；演练保持演示且不输入真实账号。demo 模拟服务器接收、拒绝和提交结果不明，不投递真实邮件。
+
+## 远程 demo 演练
+
+仅用于开发核对，不是服务器产品部署。远端准备 Python/uv 环境后，在仓库目录使用独立数据目录，并保持 loopback：
+
+```sh
+uv sync --locked
+YUNYOUBAO_DATA_DIR="$HOME/.local/share/yunyoubao-demo" uv run python main.py --headless --demo --port 8131
 ```
 
-如果你还没有远程仓库，先在本机执行：
+本机另一终端建立 SSH 隧道：
 
-```bash
-git remote add origin 你的仓库地址
-git push -u origin main
+```sh
+ssh -N -o ExitOnForwardFailure=yes -L 127.0.0.1:8131:127.0.0.1:8131 user@server
 ```
 
-### 2.4 配置环境变量
+本机访问 `http://127.0.0.1:8131`，演练结束关闭服务和隧道。两端 8131 均不得公开监听；不新增应用端口安全组或防火墙放行规则。本机端口占用时先关闭已有演练进程或选择一致的新端口，不覆盖既有服务。
 
-```bash
-cp .env.example .env
-nano .env
+远程演练无 Windows 原生保存对话框，使用浏览器下载；不能据此验收桌面原生导出。非 Windows 不支持 DPAPI 持久保存授权码，本节只使用 demo，不做真实 SMTP。
+
+## 核验与构建
+
+```powershell
+.\.venv\Scripts\python.exe -B -m unittest discover -s tests -v
+.\.venv\Scripts\python.exe -B tests/manual_email_smoke.py
+.\build.bat
 ```
 
-填入真实 SMTP 配置。不要把 `.env` 提交到 Git。
+烟测只使用临时目录和模拟传输，无真实发送入口，也不读取根 `.env`。构建脚本按锁文件新建 `dist_candidate\YunYouBao\`，验证 candidate 后输出 `release\云邮宝-0.2.0-setup.exe`、构建清单和 SHA256；需要 Python 3.12 x64、uv 和 `.tools\InnoSetup\ISCC.exe` 中的 Inno Setup 7.1.0。不使用旧 `dist\` / `dist_release\` 交付目录。
 
-### 2.5 先用临时命令验证
+构建生成成功也不能替代干净机器首装、升级、卸载、WebView2、离线编辑、数据恢复与原生导出的验收。第三方随包许可尚待核验；未完成前不宣称可公开发布。
 
-```bash
-uv run uvicorn main:app --host 0.0.0.0 --port 8123
-```
-
-本地浏览器访问：
-
-```text
-http://你的服务器公网IP:8123
-```
-
-验证通过后按 `Ctrl+C` 停止，继续配置 systemd。
-
-### 2.6 配置 systemd 常驻服务
-
-创建服务文件：
-
-```bash
-nano /etc/systemd/system/auto-email.service
-```
-
-写入：
-
-```ini
-[Unit]
-Description=AutoEmail FastAPI Service
-After=network.target
-
-[Service]
-WorkingDirectory=/opt/apps/auto_email
-ExecStart=/root/.local/bin/uv run uvicorn main:app --host 127.0.0.1 --port 8123
-Restart=always
-RestartSec=5
-Environment=PYTHONUNBUFFERED=1
-
-[Install]
-WantedBy=multi-user.target
-```
-
-启动：
-
-```bash
-systemctl daemon-reload
-systemctl enable --now auto-email
-systemctl status auto-email
-```
-
-查看日志：
-
-```bash
-journalctl -u auto-email -f
-```
-
-## 3. 绑定域名
-
-### 3.1 购买或准备域名
-
-阿里云中国站购买域名的大致流程：
-
-1. 域名控制台创建信息模板。
-2. 等待实名认证通过。
-3. 查询目标域名是否可注册。
-4. 下单支付。
-5. 在域名控制台确认域名状态正常。
-
-### 3.2 ICP 备案
-
-如果使用中国内地 ECS：
-
-1. 进入阿里云 ICP 备案系统。
-2. 选择首次备案或新增网站，系统会自动判断。
-3. 准备身份证明、域名信息、服务器信息、网站负责人信息。
-4. 按流程完成真实性核验。
-5. 等待初审、管局审核。
-6. 备案号下来后再开放域名访问。
-
-没有备案前，把域名解析到中国内地 ECS 通常会被接入商拦截。
-
-### 3.3 DNS 解析
-
-在阿里云云解析 DNS 添加记录：
-
-| 主机记录 | 记录类型 | 记录值 |
-| --- | --- | --- |
-| `@` | `A` | ECS 公网 IP |
-| `www` | `A` 或 `CNAME` | ECS 公网 IP 或根域名 |
-
-保存后等待 DNS 生效。可以用下面命令检查：
-
-```bash
-nslookup 你的域名
-```
-
-## 4. Nginx 反向代理
-
-创建配置：
-
-```bash
-nano /etc/nginx/sites-available/auto-email
-```
-
-写入，把域名换成自己的：
-
-```nginx
-server {
-    listen 80;
-    server_name example.com www.example.com;
-
-    client_max_body_size 30m;
-
-    location / {
-        proxy_pass http://127.0.0.1:8123;
-        proxy_http_version 1.1;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
-}
-```
-
-启用：
-
-```bash
-ln -s /etc/nginx/sites-available/auto-email /etc/nginx/sites-enabled/auto-email
-nginx -t
-systemctl reload nginx
-```
-
-访问：
-
-```text
-http://你的域名
-```
-
-## 5. HTTPS
-
-低成本选择：
-
-1. 使用阿里云免费/低成本 SSL 证书并在 Nginx 配置证书。
-2. 使用 Certbot 申请 Let's Encrypt 证书。
-3. 如果域名托管在 Cloudflare，可使用 Cloudflare DNS/CDN 和其自动证书能力。
-
-Certbot 示例：
-
-```bash
-apt install -y certbot python3-certbot-nginx
-certbot --nginx -d example.com -d www.example.com
-```
-
-成功后测试：
-
-```bash
-certbot renew --dry-run
-```
-
-## 6. 正式公开前必须补的安全项
-
-当前应用适合本地使用。公开到公网前，建议至少补齐：
-
-1. 登录鉴权：否则任何知道域名的人都能打开控制台。
-2. CORS 白名单：把 `allow_origins=["*"]` 改为你的正式域名。
-3. 上传限制：限制文件后缀、大小、文件名，避免任意文件落盘。
-4. SMTP 密钥保护：`.env` 只放服务器本地，权限设为 `600`。
-5. 发送审计：保留任务 ID、操作者、发送时间、失败原因。
-6. 频率限制：公开接口需要限流，避免被滥用。
-
-## 7. Windows EXE 打包
-
-本项目仍然支持打包成本地 Windows 桌面版。
-
-本机执行：
-
-```bat
-build.bat
-```
-
-或手动执行：
-
-```bash
-uv sync --dev
-uv run pyinstaller auto_email.spec --noconfirm --clean
-```
-
-输出目录：
-
-```text
-dist\云邮宝\
-```
-
-交付时复制整个 `dist\云邮宝\` 文件夹。第一次运行会自动根据 `.env.example` 创建 `.env`，你需要在目标机器上填写真实 SMTP 授权码。
-
-## 8. 推荐执行清单
-
-1. 本机确认功能正常：`uv run main.py`。
-2. 推送代码到远程 Git 仓库。
-3. ECS 拉取代码并用 `uvicorn main:app` 运行。
-4. 用公网 IP 验证。
-5. 决定是否购买域名。
-6. 如果是中国内地 ECS，完成域名实名认证和 ICP 备案。
-7. 配置 DNS A 记录。
-8. 配置 Nginx 反向代理。
-9. 配置 HTTPS。
-10. 补登录鉴权、CORS 白名单和上传安全。
-11. 最后再执行 `build.bat` 输出 Windows EXE。
-
-## 参考资料
-
-- 阿里云：ICP备案流程，https://www.alibabacloud.com/help/zh/icp-filing/icp-filing-regulations-for-guangdong
-- 阿里云：ICP备案所需资料，https://help.aliyun.com/zh/icp-filing/basic-icp-service/user-guide/required-materials
-- 阿里云：添加网站解析，https://www.alibabacloud.com/help/zh/doc-detail/2933070.html
-- 阿里云：如何注册域名，https://www.alibabacloud.com/help/zh/dws/user-guide/how-to-register-a-domain-name
-- GitHub Docs：GitHub Pages custom domains，https://docs.github.com/articles/about-custom-domains-for-github-pages-sites
-- Cloudflare Docs：Pages custom domains，https://developers.cloudflare.com/pages/configuration/custom-domains/
-- Cloudflare Registrar，https://www.cloudflare.com/products/registrar/
+旧版数据仅经应用只读导入供核对，不能直接续发；先保留备份，不删除原目录。完整范围及待验收项见 [README](../README.md) 和 [产品说明](PRODUCT.md)。

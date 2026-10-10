@@ -1,134 +1,118 @@
-<div align="center">
+# 云邮宝 AutoEmail
 
-# 📧 云邮宝 AutoEmail
+白狐品牌的本地名单邮件工作台，面向培训、会议及活动通知。用自己的 SMTP 邮箱完成名单核对、个性化邮件与任务记录，主要交付形态是 **Windows 当前用户安装 EXE**，不是公网邮件营销服务。
 
-**本地优先的批量邮件发送桌面应用 · 支持断点续传 · 防封策略 · 富文本群发**
+这是一个以开源影响力和 **AI 协作工程作品**为目标的项目。AI 参与开发协作，应用本身没有内置 AI；本版不做商业访谈、付费试点或定价。当前为 `0.2.0` 候选版，已通过本机安装、覆盖升级和隔离卸载检查；**干净 Windows 环境及第三方许可未决项仍待验收，不视为正式发布**。
 
-基于 FastAPI + pywebview + Quill 构建 · Windows 一键打包为独立 EXE
+## 已有能力与边界
 
-</div>
+- **名单预检**：导入 `.xlsx` / `.csv`，选择工作表、姓名列和邮箱列；“分工”是通用列筛选的一种用法，多列条件取交集、同列多值取并集。显示总行数、筛选数、无效、重复、排除、姓名冲突及可发送数，不静默回退列映射。
+- **冻结任务**：核对修订值后冻结有效收件人、行变量、主题、正文、账号配置和附件摘要。草稿修改不会改写历史任务；同邮箱姓名冲突阻止建任务。
+- **草稿与变量**：本地 Quill 富文本、图片、PDF 附件、草稿及少量通知模板。主题和正文支持 `{{姓名}}`、`{{单位}}` 等表头变量，兼容 `<人名>`；未知或空变量阻止处理。预览与邮件构造共用渲染逻辑，MIME 含纯文本替代和 CID 图片。
+- **SQLite 状态账本**：发送前落盘 `sending`，结果区分 `accepted`、`failed`、`uncertain`；启动恢复时，未完成提交转为待确认。续发只处理待发送对象，待确认不自动重发，人工重发须明确选择。单服务任务与测试发送互斥，暂停需等待工作线程退出。
+- **账号与预算**：QQ/163 预设、自定义 SMTP、SSL/STARTTLS 证书校验。日预算跨任务持久保存，测试和尝试也计入；预算是软件限制，不替代服务商规则。
+- **本地保护**：Windows 记住授权码使用当前用户 DPAPI，取消记住时仅存本次进程内存；账号接口不回传授权码。本地服务使用启动会话令牌及 Host/Origin 检查，上传和导出使用受控文件 ID。
+- **隔离 demo 与导出**：演示使用虚构名单和模拟传输，与正式数据分目录保存。支持失败/待确认或全部记录 XLSX 导出；桌面版调用原生保存对话框，浏览器模式下载文件。备份不包含已保存授权码，恢复后需重填。
 
----
+**“服务器已接收”不等于已送达、进入收件箱或已阅读。** 本项目不保证避免垃圾箱、封号或重复投递；SMTP 结果不明时保留待确认，Message-ID 仅用于追踪。退订是回复/mailto 加人工维护排除名单，不是自动一键退订。
 
-## 这是什么
+## 先试演示
 
-云邮宝最初为**广东省公共卫生研究院** R 语言 / Python 数据分析培训班的招生营销而生：此前需要多名研究生用各自邮箱手工向约 **3000~5000 个邮箱**发送培训通知，效率低、易被反垃圾网关拦截。云邮宝把整个流程产品化为一个桌面应用——导入 Excel 名单、富文本撰写、多账号轮换、随机防封节奏、实时监控、失败导出，并支持**断点续传**。
+源码要求 Python 3.12+；Windows 桌面窗口需要 Microsoft Edge WebView2 Runtime。以下命令在仓库根目录的 PowerShell 执行，无需复制或读取根目录 `.env`。
 
-项目已开源，后续将交接给研究院的研究生继续维护迭代。开发与协作说明见 [AGENTS.md](AGENTS.md)。
-
-## ✨ 功能特性
-
-- 📥 **Excel 名单导入**：上传 `.xlsx`，可视化映射「姓名列 / 邮箱列」，自动校验并跳过无效邮箱。
-- ✍️ **富文本正文 + 预览**：Quill 编辑器，支持字体/字号/行距/颜色/图片，可直接粘贴截图；`<人名>` 占位符按收件人自动替换；群发前可「预览」渲染效果。
-- 🧪 **测试发送**：正式群发前先发一封到自己的邮箱，核对排版与占位符，避免大规模事故。
-- 📎 **附件**：支持随邮件发送 PDF 附件。
-- 🔄 **多账号轮换 + 日配额保护**：多个发件箱轮流发送，可设「单账号单日上限」，达到即自动跳过该账号、全部用尽则暂停（可续传），规避大厂日发量风控。
-- 🛡️ **防封策略**：每日发送时间窗口、批次节奏、随机抖动、疲劳递增休眠，配合隐形字符盐值等手段规避反垃圾网关。
-- 💾 **断点续传**：进度每发一封即落盘，断网 / 断电 / 关闭程序后重开可一键继续，**不重复发送**。
-- ✅ **送达可信**：连接中断的邮件标为「待确认」（不当作成功），可一键重发，避免静默漏发。
-- 📨 **退订与黑名单**：自动添加 List-Unsubscribe 退订入口，维护本地黑名单自动排除，提升送达率与合规性。
-- 📊 **实时监控**：总计划 / 已送达 / 失败 / 待确认实时更新，进度条带 **ETA 预计剩余时间**、当前账号与速率；失败/待确认可导出 Excel 或一键重发。
-- 🌗 **深浅双主题**：玻璃拟态 + 极光背景的现代界面。
-
-## 🖼️ 界面预览
-
-**主控制台** —— 左侧配置（账号 / 名单 / 正文 / 节奏 / 配额 / 退订），右侧四项指标 + 进度监控：
-
-![主控制台](docs/screenshots/01-console.png)
-
-**正文预览** —— 群发前用示例姓名替换占位符，确认排版：
-
-![正文预览](docs/screenshots/04-preview.png)
-
-**断点续传** —— 上次任务未完成时，顶部出现提示横幅，可「继续发送」或「放弃并新建」：
-
-![断点续传横幅](docs/screenshots/03-resume-banner.png)
-
-**系统说明（内置手册）**：
-
-![系统说明](docs/screenshots/02-doc.png)
-
-## 🚀 快速开始（开发者）
-
-环境要求：Python 3.12+、[uv](https://docs.astral.sh/uv/)、Windows 桌面版需 WebView2 运行环境。
-
-```bash
-# 1. 安装依赖
-uv sync
-
-# 2. 配置发件账号（复制模板后填入真实 SMTP 邮箱与授权码，切勿提交 .env）
-cp .env.example .env
-
-# 3. 启动桌面应用
-uv run main.py
+```powershell
+uv sync --locked
+# 独立数据目录，避免接触已有正式记录
+$env:YUNYOUBAO_DATA_DIR = Join-Path $env:TEMP "YunYouBao-demo"
+uv run python main.py --demo
 ```
 
-应用会在本地启动 FastAPI 服务并弹出桌面窗口。
+已有 `.venv` 时可直接运行：
 
-> 仅启动 Web 服务（不弹桌面窗口，适合服务器部署）：
-> `uv run uvicorn main:app --host 127.0.0.1 --port 8123`
+```powershell
+.\.venv\Scripts\python.exe main.py --demo
+# 不打开桌面窗口，浏览器访问 http://127.0.0.1:8131
+.\.venv\Scripts\python.exe main.py --headless --demo --port 8131
+# 同一浏览器模式也可用 uv
+uv run python main.py --headless --demo --port 8131
+```
 
-## 📖 使用教程（6 步）
+`--demo` 选择初始演示模式；界面仍能切换正式模式，演练请保持演示模式且勿配置真实凭据。桌面版使用动态 loopback 端口，`--port` 只用于 headless 模式。不带 `--demo` 为正式模式，请先理解发送边界。
 
-1. **配置发件账号**：在「发件人账号池配置」逐行填写别名、邮箱、SMTP 授权码（**不是登录密码**，需在邮箱网页端开通 SMTP 服务后生成）。QQ → `smtp.qq.com:587`；163 → `smtp.163.com:465`。正式群发建议配 2-5 个账号轮换。
-2. **导入名单**：上传 Excel，首行为表头（如 `姓名 | 邮箱`），选择对应的姓名列与邮箱列。示例文件见 `tests/fixtures/sample_recipients.xlsx`。
-3. **撰写正文**：填写主题，在富文本编辑器中编写内容；用 `<人名>` 占位符实现个性化称呼，可粘贴截图、添加 PDF 附件。可点「预览」查看渲染效果。
-4. **设置节奏与配额**：设定每日发送窗口、每批发送数（新账号建议 `1`）、最小/最大抖动秒数（先 `5-15` 秒）、**单账号单日上限**（个人邮箱建议 200~300）；按需勾选「添加退订入口」、维护退订/黑名单。
-5. **测试发送**：在「测试发送」填入自己的邮箱，点「测试发送」先收一封，确认排版与占位符无误——**强烈建议每次群发前必做**。
-6. **发送与监控**：点击「发送」，右侧实时查看进度、ETA 与日志；结束后失败/待确认可「导出记录」或「重发失败/待确认」。需要时点「安全终止」停止（进度会保存，可续传）。
+1. 载入演示名单，选择列映射及分工等筛选，检查各项计数和问题行。
+2. 填写主题、正文和变量，查看样例预览；需要复用时保存草稿。
+3. 选择演示账号，核对最终人数后创建冻结任务并开始模拟。
+4. 在任务记录查看模拟接收、失败、待确认，试验暂停/续发与导出。
 
-更详细的说明已内置在应用的「系统说明(DOC)」标签页中。
+正式发送仅用于有合法联系依据的名单；授权码在应用账号设置中输入。商业推广需填写名单来源，任务主题会补充 AD 标识，但这些机制不构成合规保证。收到退订后由操作者更新排除名单。
 
-## 💾 断点续传说明
+## 数据与部署
 
-发送过程中，进度会在每发完一封后自动保存到运行目录的 `state/checkpoint.json`。
+安装版默认数据根目录为 `%LOCALAPPDATA%\YunYouBao`；源码版为 `.runtime\dev`。`YUNYOUBAO_DATA_DIR` 可覆盖根目录，分别保存到 `live\` 和 `demo\`，每个目录含 `yunyoubao.sqlite3` 和受控文件。名单、正文、日志及备份可能含个人信息，DPAPI 只保护保存的授权码，不加密整个数据库。
 
-- 若期间**断网、断电或手动关闭**程序，重新打开云邮宝时，主控制台顶部会出现「检测到上次未完成任务」横幅。
-- 点 **「继续发送」**：自动跳过已成功投递的邮箱，仅发剩余部分，不会重复发送。
-- 点 **「放弃并新建」**：清除上次进度（已发出的邮件不受影响），重新发起。
-- 断电场景下最多只会重发最后一封正在处理的邮件。
+旧版记录可经桌面选择目录只读导入，不修改原目录、不迁移授权码、不可直接续发。先备份并人工核对；历史暴露过的授权码仍须由持有人轮换，本轮没有代为处理。
 
-## 📦 Windows EXE 打包交付
+**本版不支持公网部署。** 远程 demo 演练仅用 SSH 隧道连接 loopback，见 [运行与部署边界](docs/deployment-guide.md)。
+
+## 测试与构建
+
+```powershell
+.\.venv\Scripts\python.exe -B -m unittest discover -s tests -v
+.\.venv\Scripts\python.exe -B tests/manual_email_smoke.py
+# 或
+uv run python -B -m unittest discover -s tests -v
+uv run python -B tests/manual_email_smoke.py
+```
+
+现有发送核心单元测试使用 SMTP 替身；手动烟测为纯 demo，创建临时数据目录、拦截 SMTP 调用，不读取 `.env`，无真实发送入口。这些测试不证明收件箱投递效果，也不替代桌面和安装器验收。
 
 ```bat
 build.bat
 ```
 
-输出目录 `dist\云邮宝\`。交付时：
+构建脚本要求 uv、Python 3.12 x64，以及位于 `.tools\InnoSetup\ISCC.exe` 的 Inno Setup 7.1.0。版本从 `pyproject.toml` 的 `project.version` 读取，本轮仍为 `0.2.0` 候选。它按锁文件新建 `.build\candidate\YunYouBao\` 和 `.build\work\`，将来源和文件清单写入 `.build\candidate\build-provenance.json`；不从旧 `dist\` / `dist_release\` / `dist_candidate\` 拼包。候选内容校验后生成：
 
-1. 将整个 `dist\云邮宝\` 文件夹复制到目标电脑；
-2. 编辑其中的 `.env`，填入真实邮箱账号与授权码；
-3. 双击 `云邮宝.exe` 启动。
+- `release\0.2.0\云邮宝-0.2.0-setup.exe`
+- `release\0.2.0\build-manifest.json` 与 `release\0.2.0\SHA256SUMS.txt`
 
-`logs/`、`uploads/`、`state/` 会在 exe 旁自动生成，断点续传在打包版同样生效。
+打包前，旧 `release\` 根目录顶层产物及本版本已有顶层产物分别移入 `release\0.2.0\archive\<时间>\`，不覆盖归档、不移动其他版本目录；失败重试也保留旧文件。`scripts\build_release.ps1 -PackageOnly` 只接受 `.build\candidate` 中有完整来源清单且哈希匹配的候选；旧根目录候选由维护者另行处理，不自动迁移或删除。
 
-## 🗂️ 项目结构
+安装器默认按当前用户安装到 `%LOCALAPPDATA%\Programs\YunYouBao`，目录页可选择其他当前用户可写的目录，升级默认沿用上次目录；不请求管理员权限或 UAC 提权，受保护目录可能无法安装。安装目录与数据目录分离，更改安装目录不会迁移数据；缺少 WebView2 时提示官方获取途径，不自动下载；卸载保留默认及自定义用户数据。安装器提供[中文许可导读](packaging/license-zh-CN.txt)和[使用与数据知情说明](packaging/notice-zh-CN.txt)，GPL 英文原文仍为权威文本，原 `LICENSE` 不变。当前构建为未签名候选，生成文件不等于通过发布验收。候选 914 个文件、154 个 DLL/PYD 的来源及 102 份许可原文已检查；许可未决项仍列在 [第三方声明](THIRD_PARTY_NOTICES.md)。
 
-```text
-main.py                FastAPI 应用 + 桌面启动 + 断点续传检查点初始化
-core/
-  engine.py            发送队列、进度跟踪、失败分类、断点续传读写
-  email_sender.py      SMTP 连接池、邮件构建、反垃圾对抗
-static/                前端界面（HTML / CSS / JS + Quill）
-assets/icon.ico        应用图标
-docs/
-  deployment-guide.md  阿里云 ECS / 域名 / Nginx / HTTPS 部署手册
-  screenshots/         README 截图
-tests/                 示例名单生成与手动发送烟雾测试
-auto_email.spec        PyInstaller 打包配置
-build.bat              Windows 一键打包脚本
-AGENTS.md              开发规范与协作者说明
+隔离安装烟测可向 ISCC 显式传入 `InstallerAppId`（含 Inno 转义的 `{{` 和独立 GUID）、`AppName`（独立快捷方式名称）、`AppVersion`、`CandidateDir`、`ReleaseDir`，并选择独立安装目录；正式 AppId 默认保持原 GUID，避免烟测影响已有卸载注册记录和快捷方式。源码 tag 标识提交、PR 用于审查合并、GitHub Release 是线上发布页，本地 `release\<版本>\` 只是构建产物目录，生成它不等于已打 tag 或线上发布。
+
+2026-10-10 核验记录：72 项单元／接口／安装配置测试通过；浏览器完成分工筛选、预览、模拟测试、暂停续发、失败与待确认人工重发及导出，1440、1024、390 像素窗口无页面横向溢出。实际安装后的 EXE 完成 914 个文件大小与 SHA256 核对，真实 WebView2 窗口确认编辑器初始为空、品牌图片、32 行演示名单和仅三个原生桥方法。真实安装向导的中文许可、数据说明和目录选择均已检查；本机首装、自选目录、同版本升级、隔离卸载通过。已有安装覆盖修复时，两份用户数据文件哈希未变。全部使用虚构名单或只读数据检查，没有真实发送。
+
+浏览器验收脚本位于 `tests/browser/workflow.cjs`，依赖已锁定的 Playwright；启动隔离演示服务后执行 `npm ci --prefix tests/browser` 和 `npm --prefix tests/browser test`。Windows 原生烟测执行 `uv run python -B tests/desktop_smoke.py`。新增安装后验收命令：
+
+```powershell
+# 只浏览向导后取消，不安装
+uv run python -B tests/installer_ui_smoke.py release/0.2.0/云邮宝-0.2.0-setup.exe
+# 校验已安装文件并在临时数据目录启动演示，不使用真实凭据
+node tests/browser/installed.cjs "$env:LOCALAPPDATA/Programs/YunYouBao/YunYouBao.exe" release/0.2.0/build-manifest.json
 ```
 
-## 🤝 协作者
+启动失败已定位并修复：原安装器的 `runtime\*` 排除规则误排了 `_internal/pythonnet/runtime/Python.Runtime.dll`，不是用户需要另装 Python；现在只排除锚定的个人数据目录，并增加完整安装文件验证。
 
-| 协作者 | 分工 |
-| --- | --- |
-| **OuYang Pace（orinpace）** | 发起人 / 产品负责人 / 需求与验收 |
-| **Claude Sonnet 3.7** | 早期架构与核心引擎实现 |
-| **GPT 5.5** | 反垃圾策略与功能迭代 |
-| **Claude Opus 4.8** | 断点续传、文档重写与产品化 |
+工作区已删除可再生成的旧 `build/`、`.build_candidate/`、`dist_candidate/`、根 Python 缓存、空 `logs/` / `state/` / `uploads/` 及重复烟测安装包。以后构建暂存统一位于 `.build/`，测试产物在 `tests/artifacts/`，运行数据在 `.runtime/`；这些目录和本地 `release/` 均不进 Git。历史 `dist/`、`dist_release/`、根 `.env`、本地开发环境和既有用户数据仍保留。后续补丁版本可改为 `0.2.1`；同步 `main.py` 的 `VERSION`，一致性测试会防止两者不一致。通过发布验收后再创建版本 tag 和 GitHub Release，不将重复候选当成新正式版本。
 
-## ⚠️ 合规提醒
+## 界面截图
 
-本项目仅用于正常的通知、邀约与名单邮件发送，**请勿用于垃圾邮件、钓鱼、骚扰或任何违法用途**。公网部署前务必增加登录鉴权、上传限制、CORS 白名单与操作审计（部署流程见 `docs/deployment-guide.md`）。不要将 `.env` 或真实授权码提交到 Git。
+以下为本版隔离演示验收生成的六张截图，不含真实名单或授权码。
+
+![工作台](docs/screenshots/01-console.png)
+![使用帮助](docs/screenshots/02-doc.png)
+![任务明细](docs/screenshots/03-resume-banner.png)
+![邮件预览](docs/screenshots/04-preview.png)
+![深色帮助](docs/screenshots/05-dark-help.png)
+![深色工作台](docs/screenshots/06-dark-workspace.png)
+
+## 工程依据与协作
+
+`main.py` 负责本地 API、启动与桌面桥；`core/service.py` 负责名单预检、冻结任务、草稿和数据管理；`core/store.py` 负责 SQLite 事务与恢复；`core/engine.py` 负责任务锁、预算和执行；`core/email_sender.py` 负责渲染、MIME 与 SMTP 阶段分类。
+
+工程上参考 listmonk 的名单分群、任务快照、抑制名单和结果分层等机制思路，不复制其 AGPL 实现，不把参考机制当作投递保证。需求与验收由项目发起人负责，AI 协助实现、审查和文档；以代码、测试及实际工件为依据，不用模型名称替代验证。当前判断与剩余验收见 [产品说明](docs/PRODUCT.md)。
+
+## 许可证
+
+云邮宝原创代码采用 **GPL-3.0-only**，见 [LICENSE](LICENSE)。第三方组件与素材保留各自许可和权属；公开分发前须完成随包许可核验。请勿用于垃圾邮件、钓鱼或骚扰，不提交真实授权码、名单及运行数据。
