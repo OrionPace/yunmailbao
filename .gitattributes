@@ -1,0 +1,4 @@
+# Preserve audited vendor/license bytes across Windows checkouts.
+LICENSE -text
+packaging/licenses/** -text
+static/vendor/** -text

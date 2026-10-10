@@ -1,0 +1,10 @@
+{
+  "name": "yunyoubao-browser-checks",
+  "private": true,
+  "scripts": {
+    "test": "node workflow.cjs"
+  },
+  "devDependencies": {
+    "playwright": "1.64.0"
+  }
+}

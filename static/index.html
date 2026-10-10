@@ -1,411 +1,61 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
-
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>云邮宝 - 智能发件终端</title>
-    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-    <link href="https://cdn.quilljs.com/1.3.6/quill.snow.css" rel="stylesheet">
-    <link rel="stylesheet" href="/static/style.css">
-    <style>
-        /* Define custom font fonts inside quill container */
-        .ql-font-microsoft-yahei {
-            font-family: "Microsoft YaHei", "微软雅黑", sans-serif;
-        }
-
-        .ql-font-simsun {
-            font-family: "SimSun", "宋体", serif;
-        }
-
-        .ql-font-simhei {
-            font-family: "SimHei", "黑体", sans-serif;
-        }
-    </style>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>云邮宝</title>
+<link rel="icon" href="/static/brand-icon.png">
+<link rel="stylesheet" href="/static/vendor/quill.snow.css"><link rel="stylesheet" href="/static/style.css">
+<script defer src="/static/vendor/quill.min.js"></script><script defer src="/static/vendor/lucide.min.js"></script><script defer src="/static/script.js"></script>
 </head>
-
 <body>
-    <div class="aurora-bg"></div>
-    <div class="app-container">
-
-        <!-- Header -->
-        <header class="glass-panel">
-            <div class="header-left">
-                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M4 4h16v16H4zM4 9l8 5 8-5" />
-                </svg>
-                <h1>云邮宝</h1>
-            </div>
-
-            <div class="header-controls">
-                <div class="tab-nav">
-                    <button class="tab-btn active" data-tab="home">主控制台</button>
-                    <button class="tab-btn" data-tab="doc">系统说明(DOC)</button>
-                </div>
-                <button class="theme-toggle" id="themeToggle" data-tooltip="切换 深浅模式">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
-                    </svg>
-                </button>
-                <div class="status-indicator" data-tooltip="引擎状态">
-                    <span class="dot online" id="statusDot"></span>
-                    <span id="statusText">系统就绪</span>
-                </div>
-            </div>
-        </header>
-
-        <!-- Tab: Main Application -->
-        <main class="tab-content active" id="tab-home">
-            <!-- Resume banner: shown when an unfinished campaign is detected on disk -->
-            <div class="glass-panel resume-banner" id="resumeBanner" style="display: none;">
-                <div class="resume-banner-text">
-                    <strong>⚠️ 检测到上次未完成的发送任务</strong>
-                    <span id="resumeBannerDetail">已发送 0 / 0，失败 0</span>
-                </div>
-                <div class="resume-banner-actions">
-                    <button type="button" class="btn btn-primary" id="resumeBtn"
-                        data-tooltip="跳过已成功投递的邮箱，从断点继续发送">继续发送</button>
-                    <button type="button" class="btn" id="discardBtn"
-                        data-tooltip="清除上次进度，重新发起一个全新任务">放弃并新建</button>
-                </div>
-            </div>
-            <div class="grid-layout">
-                <!-- Left Column: Configurator -->
-                <section class="config-section glass-panel">
-                    <h2 class="section-title">智能配置</h2>
-
-                    <form id="marketingForm">
-
-                        <!-- Sender Accounts -->
-                        <div class="form-group" data-tooltip="填入多发信账号。左侧填邮箱，右侧填授权码">
-                            <label><strong>发件人账号池配置</strong></label>
-                            <div id="senderAccountsContainer">
-                                <div class="form-row account-row" style="margin-bottom: 8px;">
-                                    <input type="text" class="account-name" placeholder="发件人别名"
-                                        style="width: 120px; flex: none;">
-                                    <input type="text" class="account-email flex-1" placeholder="example1@163.com">
-                                    <input type="text" class="account-smtp flex-1" placeholder="SMTP授权码(非密码)">
-                                </div>
-                            </div>
-                            <button type="button" class="btn" id="addAccountBtn"
-                                style="margin-top: 8px; padding: 6px 12px; font-size: 0.85rem; background: var(--bg-surface); color: var(--text-primary); border: 1px solid var(--border-color);">
-                                + 继续添加账号
-                            </button>
-                        </div>
-
-                        <!-- Target Audience -->
-                        <div class="form-group" data-tooltip="上传 Excel 后，在下方选择对应的姓名列和邮箱列">
-                            <label for="excelFile"><strong>收件人</strong></label>
-                            <div class="file-upload" id="excelDropzone">
-                                <input type="file" id="excelFile" accept=".xlsx,.xls">
-                                <span id="excelFileName">点击选择或拖拽 Excel 文件</span>
-                            </div>
-                            <div class="form-row" id="columnMappingRow" style="margin-top: 12px; display: none;">
-                                <div class="flex-1">
-                                    <label for="nameColumn" style="font-size: 0.8rem;">姓名列</label>
-                                    <select id="nameColumn"
-                                        style="width:100%; padding:10px 14px; background: var(--bg-surface); border:1px solid var(--border-color); border-radius: var(--radius-sm); color: var(--text-primary); font-family: inherit;">
-                                        <option value="">-- 请先上传 Excel --</option>
-                                    </select>
-                                </div>
-                                <div class="flex-1">
-                                    <label for="emailColumn" style="font-size: 0.8rem;">邮箱列</label>
-                                    <select id="emailColumn"
-                                        style="width:100%; padding:10px 14px; background: var(--bg-surface); border:1px solid var(--border-color); border-radius: var(--radius-sm); color: var(--text-primary); font-family: inherit;">
-                                        <option value="">-- 请先上传 Excel --</option>
-                                    </select>
-                                </div>
-                            </div>
-                        </div>
-
-                        <!-- Subject -->
-                        <div class="form-row">
-                            <div class="form-group flex-1" data-tooltip="邮件展示主题，如：【邀约】XXX培训班">
-                                <label for="emailSubject"><strong>主题</strong></label>
-                                <input type="text" id="emailSubject" placeholder="请输入邮件主题">
-                            </div>
-                        </div>
-
-                        <!-- Attachment PDF -->
-                        <div class="form-row">
-                            <div class="form-group flex-1" data-tooltip="将作为邮件底部的安全附件发送">
-                                <label for="attachmentFile"><strong>附件</strong></label>
-                                <input type="file" id="attachmentFile" class="file-input-simple" accept=".pdf">
-                            </div>
-                        </div>
-
-                        <!-- Rich Text Editor -->
-                        <div class="form-group" data-tooltip="支持字体、字号、行距、多图混排；并允许直接粘贴微信截图">
-                            <label><strong>富文本正文编写</strong> <span class="hint">占位符: &lt;人名&gt;</span></label>
-                            <div class="editor-container">
-                                <div id="editor"></div>
-                            </div>
-                        </div>
-
-                        <!-- Time Constraints -->
-                        <h3 class="subsection-title">发件引擎与防封策略</h3>
-                        <div class="form-row">
-                            <div class="form-group" data-tooltip="避免深夜发件，设定每日自动发送的起始时间">
-                                <label>窗口开始</label>
-                                <input type="time" id="startTime" value="08:00">
-                            </div>
-                            <div class="form-group" data-tooltip="超过此时间将在下一天继续执行">
-                                <label>窗口结束</label>
-                                <input type="time" id="endTime" value="21:40">
-                            </div>
-                        </div>
-                        <div class="form-row">
-                            <div class="form-group" data-tooltip="串行发送：发完这么多封后休眠一次（并非并行）。数越大节奏越紧凑，但越容易被大厂封禁！">
-                                <label>每批发送数 (1-50)</label>
-                                <input type="number" id="batchSize" value="1" min="1" max="50">
-                            </div>
-                            <div class="form-group" data-tooltip="发完单批次后的最短随机休眠">
-                                <label>最小抖动 (秒)</label>
-                                <input type="number" id="minInterval" value="5">
-                            </div>
-                            <div class="form-group" data-tooltip="发完单批次后的最长随机休眠">
-                                <label>最大抖动 (秒)</label>
-                                <input type="number" id="maxInterval" value="15">
-                            </div>
-                        </div>
-                        <div class="form-row">
-                            <div class="form-group flex-1" data-tooltip="每个发件账号每天最多发多少封，达到即自动跳过该账号；全部账号用尽则暂停（可续传）。0 = 不限制">
-                                <label>单账号单日上限 (0=不限)</label>
-                                <input type="number" id="dailyLimit" value="0" min="0">
-                            </div>
-                            <div class="form-group flex-1" data-tooltip="自动添加 List-Unsubscribe 退订头与正文退订说明，可降低投诉、提升送达率">
-                                <label>退订信息</label>
-                                <label class="checkbox-line">
-                                    <input type="checkbox" id="addUnsubscribe" checked>
-                                    <span>添加退订入口（推荐）</span>
-                                </label>
-                            </div>
-                        </div>
-
-                        <!-- Blacklist / Unsubscribe list -->
-                        <details class="form-group blacklist-box" data-tooltip="名单中命中黑名单的邮箱在发送时会被自动排除">
-                            <summary><strong>退订 / 黑名单</strong>（每行一个邮箱，自动排除）</summary>
-                            <textarea id="blacklistText" rows="3" placeholder="someone@example.com&#10;another@example.com"
-                                style="width:100%;margin-top:8px;padding:10px 14px;background:var(--bg-surface);border:1px solid var(--border-color);border-radius:var(--radius-sm);color:var(--text-primary);font-family:inherit;resize:vertical;"></textarea>
-                            <button type="button" class="btn" id="saveBlacklistBtn"
-                                style="margin-top:8px;padding:6px 12px;font-size:0.85rem;background:var(--bg-surface);color:var(--text-primary);border:1px solid var(--border-color);">保存黑名单</button>
-                        </details>
-
-                        <!-- Test send -->
-                        <div class="form-row" data-tooltip="正式群发前，先发一封到自己的邮箱核对排版与占位符替换">
-                            <div class="form-group flex-1">
-                                <label for="testEmail"><strong>测试发送</strong></label>
-                                <input type="text" id="testEmail" placeholder="填入你自己的邮箱，先收一封确认效果">
-                            </div>
-                        </div>
-
-                        <!-- Actions -->
-                        <div class="action-bar">
-                            <button type="button" class="btn btn-primary btn-send" id="startBtn">发送</button>
-                            <button type="button" class="btn" id="previewBtn"
-                                data-tooltip="预览正文（用示例姓名替换占位符）"
-                                style="background:var(--bg-surface);color:var(--text-primary);border:1px solid var(--border-color);">预览</button>
-                            <button type="button" class="btn" id="testSendBtn"
-                                data-tooltip="发送一封测试邮件到上面填写的测试邮箱"
-                                style="background:var(--bg-surface);color:var(--text-primary);border:1px solid var(--border-color);">测试发送</button>
-                            <button type="button" class="btn btn-danger" id="stopBtn" disabled
-                                data-tooltip="发送终止信号至后台">安全终止</button>
-                        </div>
-                    </form>
-                </section>
-
-                <!-- Right Column: Status & Logs -->
-                <section class="dashboard-section">
-                    <div class="metrics-grid metrics-grid-4">
-                        <div class="metric-card glass-panel" data-tooltip="Excel识别出的总收件人数">
-                            <h3>总计划</h3>
-                            <div class="metric-val" id="valTotal">0</div>
-                        </div>
-                        <div class="metric-card glass-panel text-emerlad" data-tooltip="SMTP服务器返回成功投递的数量">
-                            <h3>已送达</h3>
-                            <div class="metric-val" id="valSent">0</div>
-                        </div>
-                        <div class="metric-card glass-panel text-danger" data-tooltip="认证失败、地址不存在、被拦截等明确失败的数量">
-                            <h3>失败</h3>
-                            <div class="metric-val" id="valFailed">0</div>
-                        </div>
-                        <div class="metric-card glass-panel text-warning" data-tooltip="连接中断导致投递状态未知，需人工复查或重发，不会被当作成功">
-                            <h3>待确认</h3>
-                            <div class="metric-val" id="valUncertain">0</div>
-                        </div>
-                    </div>
-
-                    <div class="glass-panel progress-panel" data-tooltip="总进度监控">
-                        <div class="progress-info">
-                            <span>队列完成进度</span>
-                            <span id="progressText">0%</span>
-                        </div>
-                        <div class="progress-track">
-                            <div class="progress-fill" id="progressBar"></div>
-                        </div>
-                        <div class="progress-eta" id="progressEta"></div>
-                    </div>
-
-                    <div class="glass-panel logs-panel">
-                        <div class="logs-header">
-                            <h3>实时控制台记录</h3>
-                            <div class="logs-header-actions">
-                                <button class="btn btn-export" id="resendFailedBtn" style="display: none;"
-                                    data-tooltip="仅对失败/待确认的收件人重新发送一次">
-                                    🔁 重发失败/待确认
-                                </button>
-                                <button class="btn btn-export" id="exportFailedBtn" style="display: none;"
-                                    data-tooltip="导出所有失败/待确认的邮箱为 Excel 文件">
-                                    📥 导出记录 (<span id="failedCountBadge">0</span>)
-                                </button>
-                            </div>
-                        </div>
-                        <div class="terminal-logs" id="logContainer">
-                            <div class="log-line text-muted">Awaiting system initialization...</div>
-                        </div>
-                    </div>
-                </section>
-            </div>
-        </main>
-
-        <!-- Tab: Documentation -->
-        <main class="tab-content" id="tab-doc">
-            <div class="glass-panel doc-content">
-                <div class="doc-hero">
-                    <div>
-                        <span class="doc-kicker">YUNYOUBAO · 操作手册</span>
-                        <h2>云邮宝使用说明</h2>
-                        <p>云邮宝是一款<strong>本地优先</strong>的批量邮件发送桌面工具，面向培训通知、会议邀约、名单群发等既要规模、又要保留人工可控性的场景。下面按「准备 → 导入 → 撰写 → 发送 → 续传 → 排查」的顺序说明全部用法，首次使用与每次正式群发前都建议对照核查。</p>
-                    </div>
-                    <div class="doc-status-card">
-                        <span>运行模式</span>
-                        <strong>本地优先</strong>
-                        <small>账号、日志、发送进度均保存在当前电脑</small>
-                    </div>
-                </div>
-
-                <div class="doc-grid">
-                    <section class="doc-block">
-                        <h3>1. 准备发件账号与 SMTP 授权码</h3>
-                        <p>在「发件人账号池配置」中按行填写：发件人别名、邮箱地址、SMTP 授权码。<strong>授权码不是邮箱登录密码</strong>，需在邮箱网页端单独开通生成。</p>
-                        <ul>
-                            <li><strong>QQ 邮箱</strong>：网页端 → 设置 → 账号 → 开启「POP3/SMTP 服务」→ 短信验证后获得 16 位授权码；服务器 <code>smtp.qq.com:587</code>。</li>
-                            <li><strong>163 邮箱</strong>：网页端 → 设置 → POP3/SMTP/IMAP → 开启 SMTP → 设置「客户端授权密码」；服务器 <code>smtp.163.com:465</code>。</li>
-                            <li>正式群发建议配置 <strong>2-5 个账号轮换</strong>，系统会按收件人顺序轮流使用，降低单账号短时压力。</li>
-                            <li>点击「+ 继续添加账号」可增加更多发件箱。</li>
-                        </ul>
-                    </section>
-
-                    <section class="doc-block">
-                        <h3>2. 导入收件人 Excel</h3>
-                        <p>点击或拖拽上传 <code>.xlsx</code> 文件，系统读取表头后显示「姓名列 / 邮箱列」下拉，请分别选中对应列。</p>
-                        <p>数据格式范例（首行必须是表头）：</p>
-                        <ul>
-                            <li><code>姓名 | 邮箱</code></li>
-                            <li><code>张三 | zhangsan@qq.com</code></li>
-                            <li><code>李四 | lisi@163.com</code></li>
-                        </ul>
-                        <ul>
-                            <li>不要使用合并单元格、隐藏行或空表头。</li>
-                            <li>邮箱列必须是有效邮箱，无效或空行会被自动跳过。</li>
-                            <li>未手动选择映射时，默认取第一列为姓名、第二列为邮箱。</li>
-                            <li>示例文件见 <code>tests/fixtures/sample_recipients.xlsx</code>。</li>
-                        </ul>
-                    </section>
-
-                    <section class="doc-block">
-                        <h3>3. 编写正文与附件</h3>
-                        <p>富文本编辑器默认空白。正文中可使用 <code>&lt;人名&gt;</code> 占位符，发送时自动替换为该收件人的姓名，实现个性化称呼。</p>
-                        <ul>
-                            <li>支持字体、字号、行距、加粗、对齐、列表、颜色和图片。</li>
-                            <li>支持直接 <strong>粘贴微信/网页截图</strong> 到正文（内嵌为图片）。</li>
-                            <li>附件建议使用 PDF，便于收件端打开与归档。</li>
-                            <li><strong>「预览」</strong>按钮：用示例姓名替换占位符，群发前先看排版效果。</li>
-                            <li><strong>「测试发送」</strong>：填入自己的邮箱先收一封，确认排版与占位符替换正常——强烈建议每次群发前必做。</li>
-                        </ul>
-                    </section>
-
-                    <section class="doc-block">
-                        <h3>4. 设置发送节奏与防封策略</h3>
-                        <p>发送窗口限制每日发件时间段，批次与抖动控制发送速度。冷启动账号务必从保守参数起步。</p>
-                        <ul>
-                            <li><strong>窗口开始 / 结束</strong>：仅在该时段发件，超时自动挂起等待至次日窗口。</li>
-                            <li><strong>每批发送数</strong>：发完这么多封后休眠一次（<strong>串行发送，并非并行</strong>），新账号建议 <code>1</code>，数值越大节奏越紧凑但越易被封。</li>
-                            <li><strong>最小 / 最大抖动（秒）</strong>：每批次之间的随机休眠，建议先用 <code>5-15</code> 秒。</li>
-                            <li><strong>单账号单日上限</strong>：每个账号每天最多发多少封，达到即自动跳过该账号；全部账号用尽则自动暂停（可续传）。QQ/163 个人邮箱有日发量限制，建议设保守值（如每账号 200~300）。<code>0</code> 表示不限制。</li>
-                            <li><strong>退订信息</strong>：勾选后自动添加 List-Unsubscribe 退订头与正文退订说明，降低投诉、提升送达率。</li>
-                            <li><strong>退订 / 黑名单</strong>：把退订或不再联系的邮箱逐行填入并保存，发送时自动排除。</li>
-                            <li><strong>疲劳递增</strong>：累计发送越多，休眠自动越长；配合多账号轮换、隐形字符盐值等手段尽量规避反垃圾网关。</li>
-                        </ul>
-                    </section>
-
-                    <section class="doc-block doc-highlight">
-                        <h3>5. 断点续传（断网 / 关机不怕）</h3>
-                        <p>发送过程中，进度会在每发完一封后<strong>自动保存</strong>到运行目录的 <code>state/checkpoint.json</code>。若期间断网、断电或手动关闭程序：</p>
-                        <ul>
-                            <li>重新打开云邮宝，主控制台顶部会出现「检测到上次未完成任务」的提示横幅。</li>
-                            <li>点击 <strong>「继续发送」</strong>：自动跳过已成功投递的邮箱，仅发送剩余部分，<strong>不会重复发送</strong>。</li>
-                            <li>点击 <strong>「放弃并新建」</strong>：清除上次进度记录（已发出的邮件不受影响），重新发起全新任务。</li>
-                            <li>断电场景最多只会重发最后一封正在处理的邮件。</li>
-                        </ul>
-                    </section>
-
-                    <section class="doc-block">
-                        <h3>6. 监控、待确认与失败重发</h3>
-                        <p>右侧控制台实时显示总计划、已送达、失败、<strong>待确认</strong>四项指标，进度条旁显示预计剩余时间、当前账号与发送速率。</p>
-                        <ul>
-                            <li><strong>待确认</strong>：连接中断导致投递状态未知的邮件（既不算成功也不算失败），续传/重发时会自动重试，避免静默漏发。</li>
-                            <li>失败原因自动分类：地址不存在、收件箱已满、反垃圾拦截、认证失败、连接超时等。</li>
-                            <li><strong>「导出记录」</strong>：把失败 + 待确认的邮箱导出为 Excel 清单。</li>
-                            <li><strong>「重发失败/待确认」</strong>：一键仅对失败和待确认的收件人再发一次，无需重建任务。</li>
-                            <li>「安全终止」会请求后台停止并关闭 SMTP 连接，进度同时落盘可续传。</li>
-                            <li>完整日志保存在运行目录的 <code>logs/email_app.log</code>。</li>
-                        </ul>
-                    </section>
-
-                    <section class="doc-block doc-warning">
-                        <h3>7. 安全与上线前注意</h3>
-                        <p>当前版本面向<strong>本地可信环境</strong>。部署到公网前，必须补登录鉴权、上传限制、CORS 白名单与操作审计。</p>
-                        <ul>
-                            <li>请勿用于垃圾邮件、钓鱼、骚扰等违法用途，仅用于正常通知与邀约。</li>
-                            <li>不要将 <code>.env</code> 或真实授权码提交到 Git。</li>
-                            <li>Windows 交付版用 <code>build.bat</code> 打包；阿里云部署流程见 <code>docs/deployment-guide.md</code>。</li>
-                        </ul>
-                    </section>
-
-                    <section class="doc-block doc-credits">
-                        <h3>关于与协作者</h3>
-                        <p>云邮宝由广东省公共卫生研究院培训班营销需求催生，并在多个大模型协作下迭代成型，后续将交接给研究院的研究生继续维护。</p>
-                        <ul>
-                            <li><strong>OuYang Pace（orinpace）</strong> — 发起人 / 产品负责人 / 需求与验收</li>
-                            <li><strong>Claude Sonnet 3.7</strong> — 早期架构与核心引擎实现</li>
-                            <li><strong>GPT 5.5</strong> — 反垃圾策略与功能迭代</li>
-                            <li><strong>Claude Opus 4.8</strong> — 断点续传、文档重写与产品化</li>
-                        </ul>
-                        <p><small>本地优先 · 开源交接版。源码托管于作者的 GitHub 仓库，欢迎后续研究生 Fork 与改进。</small></p>
-                    </section>
-                </div>
-            </div>
-        </main>
-
-    </div>
-
-    <!-- Preview Modal -->
-    <div class="modal-overlay" id="previewModal" style="display:none;">
-        <div class="glass-panel modal-box">
-            <div class="modal-head">
-                <h3>正文预览（示例姓名：张三）</h3>
-                <button type="button" class="btn" id="previewCloseBtn"
-                    style="padding:4px 12px;background:var(--bg-surface);color:var(--text-primary);border:1px solid var(--border-color);">关闭</button>
-            </div>
-            <div class="modal-subject" id="previewSubject"></div>
-            <div class="modal-body-render" id="previewBody"></div>
-        </div>
-    </div>
-
-    <!-- Scripts -->
-    <script src="https://cdn.quilljs.com/1.3.6/quill.min.js"></script>
-    <script src="/static/script.js"></script>
+<header class="app-header">
+<a class="brand" href="#workspace"><img src="/static/brand-icon.png" alt="白狐"><strong>云邮宝</strong><span id="version">v0.2</span></a>
+<nav aria-label="主导航"><button data-view="workspace" class="nav active"><i data-lucide="layout-dashboard"></i>工作台</button><button data-view="history" class="nav"><i data-lucide="list-checks"></i>任务记录</button><button data-view="help" class="nav"><i data-lucide="book-open"></i>使用帮助</button></nav>
+<div class="header-tools"><div class="segmented" aria-label="运行模式"><button data-mode="live">正式</button><button data-mode="demo">演示</button></div><button id="theme" class="icon" title="切换明暗主题" aria-label="切换明暗主题"><i data-lucide="sun-moon"></i></button><button id="settings-open" class="icon" title="设置" aria-label="设置"><i data-lucide="settings-2"></i></button></div>
+</header>
+<div id="demo-banner" class="demo-banner" hidden><i data-lucide="flask-conical"></i><strong>演示模式</strong><span>虚构名单与模拟发送，不投递真实邮件；数据与正式模式隔离。</span><button id="demo-load">载入演示名单</button></div>
+<div id="connection" class="connection" hidden role="alert"></div>
+<main id="workspace" class="view">
+<div class="workspace-heading"><div><p class="eyebrow">MAIL WORKSPACE</p><h1>准备发送任务</h1></div><div class="inline"><span id="draft-state" class="muted">未保存草稿</span><button id="draft-open"><i data-lucide="folder-open"></i>草稿</button><button id="draft-save"><i data-lucide="save"></i>保存草稿</button></div></div>
+<div class="work-layout"><div class="composer">
+<nav class="steps" aria-label="任务步骤"><button data-step="1" class="active"><span>01</span>名单<i data-lucide="users"></i></button><button data-step="2"><span>02</span>邮件<i data-lucide="mail"></i></button><button data-step="3"><span>03</span>账号与节奏<i data-lucide="sliders-horizontal"></i></button><button data-step="4"><span>04</span>核对发送<i data-lucide="shield-check"></i></button></nav>
+<section id="step-1" class="step">
+<div class="section-head"><div><h2>收件名单</h2><p id="import-name" class="muted">尚未导入名单</p></div><button id="import-trigger"><i data-lucide="upload"></i>导入名单</button><input id="import-file" type="file" accept=".xlsx,.csv" hidden></div>
+<div id="import-empty" class="empty dropzone" tabindex="0" role="button" aria-label="导入 XLSX 或 CSV 名单"><i data-lucide="file-spreadsheet"></i><strong>选择或拖入名单</strong><span>.xlsx / .csv</span></div>
+<div id="import-content" hidden>
+<div class="fields three"><label>工作表<select id="sheet"></select></label><label>姓名列<select id="name-column"></select></label><label>邮箱列<select id="email-column"></select></label></div>
+<div class="filter-heading"><h3>筛选范围</h3><div class="inline"><button id="division-filter"><i data-lucide="network"></i>按分工筛选</button><button id="filter-add"><i data-lucide="plus"></i>添加条件</button><button id="filter-clear" class="icon" title="清空筛选" aria-label="清空筛选"><i data-lucide="filter-x"></i></button></div></div>
+<div id="filters"></div><div id="import-counts" class="counts"></div>
+<div class="section-head compact"><label class="check"><input id="problem-only" type="checkbox">仅看问题行</label><div class="inline"><span id="preflight-state" class="muted">等待预检</span><button id="preflight-refresh" class="icon" title="重新预检" aria-label="重新预检"><i data-lucide="refresh-cw"></i></button></div></div>
+<div class="table-wrap"><table id="recipients-table"><thead></thead><tbody></tbody></table></div>
+<div class="pagination"><span id="import-page-label"></span><div class="inline"><select id="import-page-size" aria-label="每页行数"><option value="20">20 行</option><option value="50">50 行</option><option value="100">100 行</option></select><button id="import-prev" class="icon" title="上一页" aria-label="上一页"><i data-lucide="chevron-left"></i></button><button id="import-next" class="icon" title="下一页" aria-label="下一页"><i data-lucide="chevron-right"></i></button></div></div>
+</div></section>
+<section id="step-2" class="step" hidden>
+<div class="section-head"><h2>邮件内容</h2><div class="inline"><button id="template-open"><i data-lucide="files"></i>模板</button><button id="focus-editor" class="icon" title="专注编辑" aria-label="专注编辑"><i data-lucide="maximize-2"></i></button></div></div>
+<label>邮件主题<input id="subject" maxlength="200" placeholder="填写邮件主题"></label>
+<div class="variable-bar"><label>插入变量<select id="variable-column"><option value="">选择名单列</option></select></label><div class="segmented"><button data-variable-target="body" class="active">正文</button><button data-variable-target="subject">主题</button></div><button id="variable-insert" class="icon" title="插入变量" aria-label="插入变量"><i data-lucide="braces"></i></button><button id="legacy-name" title="插入兼容姓名变量">&lt;人名&gt;</button></div>
+<div class="editor-shell"><div id="editor"></div></div><div id="content-issues" class="issues" aria-live="polite"></div>
+<div class="attachment-row"><div><h3>公共附件 · PDF</h3><span id="attachment-label" class="muted">未添加附件</span></div><div class="inline"><button id="attachment-upload"><i data-lucide="paperclip"></i>上传附件</button><button id="attachment-remove" class="icon" title="移除附件" aria-label="移除附件" hidden><i data-lucide="x"></i></button><input id="attachment-file" type="file" accept=".pdf" hidden></div></div>
+<div class="fields two"><label>用途<select id="purpose"><option value="notification">事务通知</option><option value="promotion">推广邮件</option></select></label><label>名单来源说明<input id="source-note" placeholder="例如：已报名参会者"></label></div>
+<label class="check"><input type="checkbox" id="unsubscribe" checked>添加退订信息</label>
+</section>
+<section id="step-3" class="step" hidden>
+<div class="section-head"><h2>发件账号</h2><button id="account-add"><i data-lucide="plus"></i>新增账号</button></div><div id="accounts"></div>
+<div class="section-head separated"><h2>发送窗口</h2></div><div class="fields two"><label>开始时间<input id="start-time" type="time" value="08:00"></label><label>结束时间<input id="end-time" type="time" value="21:40"></label></div>
+<div class="notice"><i data-lucide="clock-3"></i><span>节奏按账号分别控制；窗口外、额度耗尽或服务异常时，以任务暂停原因判断后续操作。</span></div>
+</section>
+<section id="step-4" class="step" hidden>
+<div class="section-head"><h2>核对发送</h2><button id="review-refresh"><i data-lucide="shield-check"></i>重新预检</button></div><label>任务名称<input id="task-title" placeholder="例如：十月培训通知"></label><div id="review-summary" class="review-summary"></div><div id="review-checks"></div>
+<label class="check separated"><input id="send-consent" type="checkbox">已核对名单、内容和授权范围，确认创建此任务</label><div class="notice"><i data-lucide="info"></i><span>创建任务不会立即发送。请在任务监控中明确启动；服务器已接收不代表最终送达。</span></div>
+</section>
+<footer class="compose-footer"><button id="step-back"><i data-lucide="arrow-left"></i>上一步</button><span id="step-position" class="muted">01 / 04</span><button id="step-next">下一步<i data-lucide="arrow-right"></i></button></footer>
+</div><aside class="monitor" aria-label="任务监控"><div class="section-head"><h2>任务监控</h2><button id="monitor-refresh" class="icon" title="刷新任务" aria-label="刷新任务"><i data-lucide="refresh-cw"></i></button></div><div id="monitor-content" class="monitor-content"></div></aside></div>
+</main>
+<main id="history" class="view" hidden><div class="workspace-heading"><div><p class="eyebrow">TASK ARCHIVE</p><h1>任务记录</h1></div><button id="history-refresh"><i data-lucide="refresh-cw"></i>刷新</button></div><div class="fields two history-filters"><label>搜索<input id="task-search" type="search" placeholder="任务名称"></label><label>状态<select id="task-status"><option value="">全部状态</option><option value="ready">待启动</option><option value="running">运行中</option><option value="paused">已暂停</option><option value="completed">已完成</option><option value="completed_with_issues">完成但有问题</option></select></label></div><div id="task-list"></div><section id="task-detail" class="task-detail" hidden></section></main>
+<main id="help" class="view" hidden><div class="workspace-heading"><div><p class="eyebrow">REFERENCE</p><h1>使用帮助</h1></div><label class="search-label"><i data-lucide="search"></i><input id="help-search" type="search" placeholder="搜索导入、授权码、待确认…" aria-label="搜索帮助"></label></div><div class="help-layout"><nav id="help-directory" aria-label="帮助目录"></nav><div id="help-articles"></div></div></main>
+<footer id="action-bar" class="action-bar"><div><span id="mode-label" class="badge">正式模式</span><span id="selection-summary">尚未导入名单</span></div><div class="inline"><button id="preview-open"><i data-lucide="scan-eye"></i>预览</button><button id="test-open"><i data-lucide="send-horizontal"></i>测试发送</button><button id="task-create" class="primary"><i data-lucide="shield-check"></i>创建待发送任务</button></div></footer>
+<div id="drawer-backdrop" class="backdrop" hidden></div>
+<aside id="settings" class="drawer" hidden aria-label="设置"><div class="section-head"><h2>设置</h2><button id="settings-close" class="icon" title="关闭设置" aria-label="关闭设置"><i data-lucide="x"></i></button></div><section><h3>数据与备份</h3><dl id="data-info"></dl><div class="button-stack"><button id="data-folder"><i data-lucide="folder-open"></i>打开数据目录</button><button id="data-backup"><i data-lucide="download"></i>备份当前模式数据</button><button id="data-restore"><i data-lucide="archive-restore"></i>恢复备份</button><button id="data-legacy"><i data-lucide="import"></i>导入旧版数据</button><input id="restore-file" type="file" hidden></div></section><section><h3>退订与排除名单</h3><label>每行一个邮箱<textarea id="suppressions" rows="7" spellcheck="false"></textarea></label><button id="suppression-save"><i data-lucide="save"></i>保存排除名单</button></section><section><h3>清理</h3><label class="check"><input id="cleanup-logs" type="checkbox" checked>历史日志</label><label class="check"><input id="cleanup-imports" type="checkbox" checked>未使用的导入文件</label><button id="data-cleanup" class="danger"><i data-lucide="trash-2"></i>清理所选数据</button></section></aside>
+<dialog id="modal"><div class="modal-head"><h2 id="modal-title"></h2><button id="modal-close" class="icon" title="关闭" aria-label="关闭"><i data-lucide="x"></i></button></div><div id="modal-content"></div></dialog><div id="toast" role="status" aria-live="polite" hidden></div>
 </body>
-
 </html>

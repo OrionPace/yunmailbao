@@ -21,3 +21,11 @@ remotion/**/out/
 .claude/
 # 断点续传检查点（运行时用户数据，随 exe 在本地生成）
 state/
+.runtime/
+.tools/
+dist_candidate/
+release/
+tests/artifacts/
+.build_candidate/
+.build/
+tests/browser/node_modules/

@@ -1,476 +1,285 @@
-import os
+import datetime as dt
 import json
+import threading
 import time
-import random
-import datetime
-import tempfile
-import pandas as pd
-from core.email_sender import EmailSenderCore
 
-class MarketingEngine:
-    def __init__(self, logger):
-        self.logger = logger
-        self.sender_core = EmailSenderCore(logger)
-        self.is_running = False
-        self.logs = []
-        self.progress = {"total": 0, "sent": 0, "failed": 0, "uncertain": 0, "current": 0,
-                         "eta_seconds": None, "rate_per_min": None, "current_account": ""}
-        self.failed_recipients = []     # Track failed emails for export
-        self.uncertain_recipients = []  # 投递状态未知（连接中断），需人工复查/重试
-        # --- Resume / checkpoint state ---
-        self.sent_emails = set()        # Emails confirmed delivered (for idempotent skip)
-        self.account_usage = {}         # {email: {"date": "YYYY-MM-DD", "count": N}} 每账号当日发量
-        self.checkpoint_path = None     # Set by main.py at startup
-        self.blacklist_path = None      # state/blacklist.txt
-        self.active_config = None       # Config of the in-flight / paused campaign
-        self.start_ts = None            # 本轮发送起始时间（用于 ETA 估算）
+from .email_sender import EmailSenderCore
+from .store import timestamp
 
-    def _log(self, msg):
-        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        log_entry = f"[{timestamp}] {msg}"
-        self.logger.info(log_entry)
-        self.logs.append(log_entry)
-        if len(self.logs) > 500:
-            self.logs = self.logs[-500:]
 
-    def stop(self):
-        self.is_running = False
-        self._log("收到停止指令，正在安全终止任务...")
+class DemoTransport:
+    def send_attempt(self, sender, recipient, **kwargs):
+        from .email_sender import SendResult
+        position = int(recipient.get("position", 0))
+        if recipient.get("demo_retry"):
+            return SendResult("accepted", "演示：模拟人工复查后的重新提交，未发送真实邮件。")
+        if position == 3:
+            return SendResult("uncertain", "演示：模拟提交期间断连，未发送真实邮件。")
+        if position == 6:
+            return SendResult("failed", "演示：模拟地址拒绝，未发送真实邮件。", code=550)
+        return SendResult("accepted", "演示：模拟服务器接受，未发送真实邮件。")
 
-    def get_failed_recipients(self):
-        """Return failed + uncertain recipients for export (待确认单独标注原因)。"""
-        return self.failed_recipients + self.uncertain_recipients
+    def close_all_connections(self):
+        pass
 
-    # ------------------------------------------------------------------
-    # Blacklist (退订/黑名单)
-    # ------------------------------------------------------------------
-    def set_blacklist_path(self, path):
-        self.blacklist_path = path
 
-    def load_blacklist(self):
-        """Return a set of lowercased blacklisted emails from state/blacklist.txt."""
-        if not self.blacklist_path or not os.path.exists(self.blacklist_path):
-            return set()
-        try:
-            with open(self.blacklist_path, "r", encoding="utf-8") as f:
-                return {ln.strip().lower() for ln in f if ln.strip() and not ln.startswith("#")}
-        except Exception as e:
-            self.logger.error(f"读取黑名单失败: {e}")
-            return set()
+class TaskEngine:
+    def __init__(self, service, transport_factory=None):
+        self.service = service
+        self.store = service.store
+        self.transport_factory = transport_factory or (DemoTransport if service.demo else EmailSenderCore)
+        self.lock = threading.Lock()
+        self.stop_event = threading.Event()
+        self.thread = None
+        self.task_id = None
+        self.runtime_errors = {}
 
-    # ------------------------------------------------------------------
-    # Per-account daily quota (每账号单日发量配额)
-    # ------------------------------------------------------------------
-    def _account_count_today(self, email):
-        today = datetime.date.today().isoformat()
-        rec = self.account_usage.get(email)
-        if not rec or rec.get("date") != today:
-            return 0
-        return rec.get("count", 0)
-
-    def _bump_account(self, email):
-        today = datetime.date.today().isoformat()
-        rec = self.account_usage.get(email)
-        if not rec or rec.get("date") != today:
-            self.account_usage[email] = {"date": today, "count": 1}
-        else:
-            rec["count"] = rec.get("count", 0) + 1
-
-    def _pick_sender(self, senders, i, daily_limit):
-        """Round-robin starting at i, returning the next account still under its
-        daily quota. Returns None when every account is exhausted for today."""
-        n = len(senders)
-        for offset in range(n):
-            cand = senders[(i + offset) % n]
-            if daily_limit <= 0 or self._account_count_today(cand["email"]) < daily_limit:
-                return cand
-        return None
-
-    def _update_eta(self, done_this_run, processed_index, total):
-        """Estimate remaining time from this run's observed throughput."""
-        if not self.start_ts or done_this_run <= 0:
-            return
-        elapsed = time.time() - self.start_ts
-        if elapsed <= 0:
-            return
-        rate_per_sec = done_this_run / elapsed
-        remaining = max(0, total - processed_index)
-        self.progress["rate_per_min"] = round(rate_per_sec * 60, 1)
-        self.progress["eta_seconds"] = int(remaining / rate_per_sec) if rate_per_sec > 0 else None
-
-    # ------------------------------------------------------------------
-    # Checkpoint / Resume (断点续传)
-    # ------------------------------------------------------------------
-    def set_checkpoint_path(self, path):
-        """Register where the resume checkpoint lives (called once at startup)."""
-        self.checkpoint_path = path
-
-    def _save_checkpoint(self, config, status):
-        """Atomically persist current campaign progress so it survives a crash
-        or power loss. Written after every email send, so at most one email is
-        ever re-sent on resume."""
-        if not self.checkpoint_path:
-            return
-        data = {
-            "campaign_id": self._campaign_id(config),
-            "status": status,  # running | paused | done
-            "config": config,
-            "total": self.progress.get("total", 0),
-            "sent_emails": sorted(self.sent_emails),
-            "failed_recipients": self.failed_recipients,
-            "uncertain_recipients": self.uncertain_recipients,
-            "account_usage": self.account_usage,
-            "progress": self.progress,
-            "updated_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        }
-        try:
-            os.makedirs(os.path.dirname(self.checkpoint_path), exist_ok=True)
-            dir_name = os.path.dirname(self.checkpoint_path)
-            fd, tmp_path = tempfile.mkstemp(dir=dir_name, suffix=".tmp")
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
-            os.replace(tmp_path, self.checkpoint_path)  # atomic on same volume
-        except Exception as e:
-            self.logger.error(f"保存断点续传检查点失败: {e}")
-
-    def _read_checkpoint(self):
-        """Return parsed checkpoint dict, or None if missing/corrupt."""
-        if not self.checkpoint_path or not os.path.exists(self.checkpoint_path):
-            return None
-        try:
-            with open(self.checkpoint_path, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception as e:
-            self.logger.error(f"读取断点续传检查点失败: {e}")
-            return None
-
-    def _clear_checkpoint(self):
-        """Discard any saved progress (used by '放弃并新建' and fresh starts)."""
-        self.sent_emails = set()
-        self.account_usage = {}
-        self.active_config = None
-        if self.checkpoint_path and os.path.exists(self.checkpoint_path):
-            try:
-                os.remove(self.checkpoint_path)
-            except Exception as e:
-                self.logger.error(f"清除断点续传检查点失败: {e}")
+    @property
+    def busy(self):
+        return self.lock.locked()
 
     @staticmethod
-    def _campaign_id(config):
-        """Stable signature of a campaign (excel + subject + recipient count)."""
-        import hashlib
-        raw = f"{config.get('excel_path', '')}|{config.get('subject', '')}"
-        return hashlib.md5(raw.encode("utf-8")).hexdigest()[:12]
+    def in_window(start, end, now=None):
+        now = now or dt.datetime.now().time()
+        start, end = dt.time.fromisoformat(start), dt.time.fromisoformat(end)
+        if start == end:
+            return True
+        return start <= now < end if start < end else now >= start or now < end
 
-    def has_resumable_checkpoint(self):
-        """True if there is an unfinished campaign that can be continued."""
-        cp = self._read_checkpoint()
-        if not cp:
-            return False
-        if cp.get("status") == "done":
-            return False
-        total = cp.get("total", 0)
-        sent = len(cp.get("sent_emails", []))
-        return total > 0 and sent < total
+    def _launch_locked(self, identifier):
+        task = self.service.task(identifier)
+        if task["legacy"]:
+            raise ValueError("旧版导入记录仅供核对，不可直接续发。")
+        if task["status"] not in {"ready", "paused"}:
+            raise ValueError("此任务不能直接启动；已完成任务请选择失败重试或新建草稿。")
+        if not task["counts"]["pending"]:
+            raise ValueError("没有待发送对象；待确认必须人工单独处理。")
+        config = task["config"]
+        for profile in config["sender_profiles"]:
+            self.service.sender(profile["id"], profile)
+        item, _ = self.service.attachment(config.get("attachment_id"))
+        if item and item["digest"] != config["attachment_digest"]:
+            raise ValueError("附件已改变，请新建任务核对。")
+        with self.store.transaction() as db:
+            db.execute("UPDATE recipients SET status='uncertain',detail=? WHERE task_id=? AND status='sending'",
+                       ("上次提交结果不明，请人工确认。", identifier))
+            db.execute("UPDATE tasks SET status='starting',pause_reason='',updated_at=? WHERE id=?", (timestamp(), identifier))
+        self.runtime_errors.pop(identifier, None)
+        self.task_id = identifier
+        self.stop_event.clear()
+        self.thread = threading.Thread(target=self._run, args=(identifier,), daemon=True, name="YunYouBaoSender")
+        self.thread.start()
+        return dict(task, status="starting", pause_reason="")
 
-    def checkpoint_summary(self):
-        """Lightweight summary for the frontend resume banner (no passwords)."""
-        cp = self._read_checkpoint()
-        if not cp:
-            return {"resumable": False}
-        total = cp.get("total", 0)
-        sent = len(cp.get("sent_emails", []))
-        return {
-            "resumable": self.has_resumable_checkpoint(),
-            "status": cp.get("status"),
-            "total": total,
-            "sent": sent,
-            "failed": len(cp.get("failed_recipients", [])),
-            "uncertain": len(cp.get("uncertain_recipients", [])),
-            "subject": cp.get("config", {}).get("subject", ""),
-            "updated_at": cp.get("updated_at", ""),
-        }
-
-    def get_resume_config(self):
-        """Return the stored config needed to continue an interrupted campaign."""
-        cp = self._read_checkpoint()
-        if not cp:
-            return None
-        return cp.get("config")
-
-    def load_checkpoint_into_memory(self):
-        """On startup, surface a paused campaign so /api/status reflects it
-        (lets the UI show progress before the user clicks 继续)."""
-        cp = self._read_checkpoint()
-        if not cp or not self.has_resumable_checkpoint():
-            return
-        self.sent_emails = set(cp.get("sent_emails", []))
-        self.failed_recipients = cp.get("failed_recipients", [])
-        self.uncertain_recipients = cp.get("uncertain_recipients", [])
-        self.account_usage = cp.get("account_usage", {})
-        self.progress = cp.get("progress", {"total": 0, "sent": 0, "failed": 0, "uncertain": 0, "current": 0})
-        self.active_config = cp.get("config")
-
-    @staticmethod
-    def _classify_error(error_msg: str) -> str:
-        """Classify SMTP error into human-readable bounce reason."""
-        err = error_msg.lower()
-        if 'user not found' in err or 'no such user' in err or '550' in err or 'does not exist' in err or 'invalid' in err:
-            return "地址不存在/被退回"
-        elif 'quota' in err or 'full' in err or 'over' in err:
-            return "收件箱已满"
-        elif 'spam' in err or 'reject' in err or 'blocked' in err or 'denied' in err or 'blacklist' in err:
-            return "被反垃圾拦截"
-        elif 'auth' in err:
-            return "发件人认证失败"
-        elif 'timeout' in err or 'connection' in err:
-            return "连接超时/中断"
-        else:
-            return "其他失败"
-
-    def run_campaign(self, config, resume=False):
-        """
-        config dict containing:
-        - excel_path, image_path, attachment_path
-        - subject, html_content
-        - min_interval, max_interval
-        - start_time, end_time
-        - name_column, email_column (column name mapping)
-        - senders: list of dicts (email, password, name, smtp_server, smtp_port)
-
-        resume=True 时从磁盘检查点恢复进度（断点续传），已成功投递的邮箱会被跳过，
-        不重复发送；resume=False 表示全新任务，会清空历史进度并删除旧检查点。
-        """
-        self.is_running = True
-        self.active_config = config
-        self.start_ts = time.time()
-        if resume:
-            cp = self._read_checkpoint()
-            if cp:
-                self.sent_emails = set(cp.get("sent_emails", []))
-                self.failed_recipients = list(cp.get("failed_recipients", []))
-                self.uncertain_recipients = list(cp.get("uncertain_recipients", []))
-                self.account_usage = cp.get("account_usage", {})
-                self._log(f"断点续传：已恢复进度，{len(self.sent_emails)} 个邮箱此前已成功投递，将自动跳过。")
-            else:
-                self.sent_emails = set()
-                self.failed_recipients = []
-                self.uncertain_recipients = []
-                self.account_usage = {}
-        else:
-            # Fresh campaign: wipe any previous progress on disk and in memory
-            self._clear_checkpoint()
-            self.logs.clear()
-            self.failed_recipients = []
-            self.uncertain_recipients = []
-            self.sent_emails = set()
-            self.account_usage = {}
-        self._log("初始化发件营销计划...")
-        
+    def start(self, identifier):
+        if not self.lock.acquire(blocking=False):
+            raise ValueError("已有任务或测试正在运行，请等待停止完成。")
         try:
-            name_col = config.get('name_column', '')
-            email_col = config.get('email_column', '')
+            return self._launch_locked(identifier)
+        except BaseException:
+            self.lock.release()
+            raise
 
-            # 收件人来源：仅重发失败时用内存名单覆盖，否则从 Excel 读取
-            override = config.get('recipients_override')
-            recipients = []
-            if override:
-                for r in override:
-                    name = str(r.get("name", "")).strip()
-                    email = str(r.get("email", "")).strip()
-                    if name and email and self.sender_core.validate_email(email):
-                        recipients.append({"name": name, "email": email})
-                self._log(f"仅重发模式：载入 {len(recipients)} 个待重发收件人。")
-            else:
-                # 1. Load Excel
-                df = pd.read_excel(config['excel_path'])
-                for _, row in df.iterrows():
-                    # Use column name if provided, otherwise fall back to positional index
-                    if name_col and name_col in df.columns:
-                        name = str(row[name_col]).strip() if not pd.isna(row[name_col]) else ''
-                    else:
-                        name = str(row.iloc[0]).strip() if not pd.isna(row.iloc[0]) else ''
+    def pause(self, identifier):
+        if self.task_id != identifier or not self.busy:
+            raise ValueError("这个任务没有正在发送。")
+        self.stop_event.set()
+        # A worker may finish while the request is being handled; never revive it.
+        with self.store.transaction() as db:
+            db.execute("UPDATE tasks SET status='stopping',pause_reason='manual',updated_at=? "
+                       "WHERE id=? AND status IN ('starting','running')", (timestamp(), identifier))
+        return self.service.task(identifier)
 
-                    if email_col and email_col in df.columns:
-                        email = str(row[email_col]).strip() if not pd.isna(row[email_col]) else ''
-                    else:
-                        email = str(row.iloc[1]).strip() if not pd.isna(row.iloc[1]) else ''
+    def retry(self, identifier, selected=None, include_uncertain=False):
+        if not self.lock.acquire(blocking=False):
+            raise ValueError("请等待任务或测试停止后再重试。")
+        try:
+            task = self.service.task(identifier)
+            if task["legacy"]:
+                raise ValueError("旧版记录不能重试。")
+            if task["status"] in {"starting", "running", "stopping"}:
+                raise ValueError("任务未停止，不能重试。")
+            rows = self.store.all("SELECT id,status FROM recipients WHERE task_id=? AND status IN ('failed','uncertain')", (identifier,))
+            if include_uncertain and not selected:
+                raise ValueError("待确认重发必须明确选择收件人。")
+            choices = set(selected or [row["id"] for row in rows if row["status"] == "failed"])
+            valid = {row["id"] for row in rows if row["status"] == "failed" or include_uncertain}
+            if not choices or not choices.issubset(valid):
+                raise ValueError("重试选择无效；已接收对象不能再次发送。")
+            with self.store.transaction() as db:
+                db.executemany("UPDATE recipients SET status='pending',detail='',attempts=0,next_attempt=0 WHERE id=? AND task_id=?",
+                               [(choice, identifier) for choice in choices])
+                db.execute("UPDATE tasks SET status='paused',pause_reason='retry',updated_at=? WHERE id=?", (timestamp(), identifier))
+            self.store.log(identifier, f"人工选择重试 {len(choices)} 人；已接收对象保持不变。")
+            return self._launch_locked(identifier)
+        except BaseException:
+            self.lock.release()
+            raise
 
-                    if name and email and self.sender_core.validate_email(email):
-                        recipients.append({"name": name, "email": email})
+    def quota(self, profile):
+        from .service import email_key
+        row = self.store.one("SELECT count,last_attempt FROM quotas WHERE account_key=? AND day=?",
+                             (email_key(profile["email"]), dt.date.today().isoformat()))
+        return row or {"count": 0, "last_attempt": 0}
 
-            # 退订/黑名单排除
-            blacklist = self.load_blacklist()
-            if blacklist:
-                before = len(recipients)
-                recipients = [r for r in recipients if r["email"].lower() not in blacklist]
-                excluded = before - len(recipients)
-                if excluded > 0:
-                    self._log(f"已排除黑名单/退订收件人 {excluded} 个。")
+    def reserve(self, profile):
+        from .service import email_key
+        key, today, now = email_key(profile["email"]), dt.date.today().isoformat(), time.time()
+        with self.store.transaction() as db:
+            row = db.execute("SELECT count,last_attempt FROM quotas WHERE account_key=? AND day=?", (key, today)).fetchone()
+            if row and row["count"] >= profile["daily_limit"]:
+                return False
+            if not self.service.demo and row and now - row["last_attempt"] < 60 / profile["per_minute"]:
+                return False
+            db.execute("INSERT INTO quotas VALUES(?,?,1,?) ON CONFLICT(account_key,day) DO UPDATE SET count=count+1,last_attempt=excluded.last_attempt",
+                       (key, today, now))
+        return True
 
-            total = len(recipients)
-            # On resume, seed counters from restored state so the dashboard and
-            # fatigue logic continue where they left off.
-            already_sent = sum(1 for r in recipients if r["email"] in self.sent_emails)
-            self.progress = {
-                "total": total,
-                "sent": already_sent,
-                "failed": len(self.failed_recipients),
-                "uncertain": len(self.uncertain_recipients),
-                "current": already_sent,
-                "eta_seconds": None,
-                "rate_per_min": None,
-                "current_account": "",
-            }
-
-            if total == 0:
-                self._log("未在Excel中找到有效的收件人。请检查列映射是否正确。")
-                self.is_running = False
-                return
-
-            self._log(f"成功加载 {total} 个有效收件人。")
-            if name_col:
-                self._log(f"列映射: 姓名列={name_col}, 邮箱列={email_col}")
-            
-            senders = config['senders']
-            if not senders:
-                self._log("未配置任何发件箱。")
-                self.is_running = False
-                return
-
-            email_index = 1
-            start_t = datetime.datetime.strptime(config['start_time'], "%H:%M").time()
-            end_t = datetime.datetime.strptime(config['end_time'], "%H:%M").time()
-            batch_size = int(config.get('batch_size', 1))
-            base_min = int(config.get('min_interval', 5))
-            base_max = int(config.get('max_interval', 15))
-            daily_limit = int(config.get('daily_limit_per_account', 0) or 0)
-            add_unsubscribe = bool(config.get('add_unsubscribe', True))
-            done_this_run = 0  # 本轮实际尝试发送数（用于 ETA 速率估算）
-
-            for i, recipient in enumerate(recipients):
-                if not self.is_running:
-                    self._log("任务已手动终止。")
-                    self._save_checkpoint(config, "paused")
-                    break
-
-                self.progress["current"] = i + 1
-
-                # 断点续传：已成功投递的邮箱直接跳过，避免重复发送
-                if recipient["email"] in self.sent_emails:
-                    self._log(f"⏭️ 第 {i+1} 封 {recipient['email']} 此前已成功投递，跳过。")
+    def _run(self, identifier):
+        transport = None
+        terminal_state = None
+        try:
+            transport = self.transport_factory()
+            config = self.service.task(identifier)["config"]
+            self.store.set_status(identifier, "running")
+            self.store.log(identifier, "演示任务开始，所有发送均为模拟。" if self.service.demo else "开始处理冻结名单。")
+            disabled, cursor, waiting = set(), 0, False
+            while not self.stop_event.is_set():
+                pending = self.store.all("SELECT * FROM recipients WHERE task_id=? AND status='pending' ORDER BY position", (identifier,))
+                if not pending:
+                    counts = self.store.counts(identifier)
+                    terminal_state = ("completed_with_issues" if counts["failed"] or counts["uncertain"] else "completed", "")
+                    self.store.log(identifier, "本轮处理完毕；待确认对象未自动重发。")
+                    return
+                if not self.service.demo and not self.in_window(config["start_time"], config["end_time"]):
+                    if not waiting:
+                        self.store.log(identifier, "当前不在发送窗口内，等待中，可随时暂停。")
+                        self.store.set_status(identifier, "running", "window")
+                        waiting = True
+                    self.stop_event.wait(1)
                     continue
+                if waiting:
+                    self.store.set_status(identifier, "running")
+                    waiting = False
+                now = time.time()
+                recipient = next((row for row in pending if row["next_attempt"] <= now), None)
+                if recipient is None:
+                    self.stop_event.wait(min(1, max(0.01, min(row["next_attempt"] for row in pending) - now)))
+                    continue
+                if self.store.one("SELECT email_key FROM suppressions WHERE email_key=?", (recipient["email_key"],)):
+                    self.store.execute("UPDATE recipients SET status='failed',detail=? WHERE id=?",
+                                       ("已排除：发送前命中退订／排除名单。", recipient["id"]))
+                    self.store.log(identifier, f"第 {recipient['position'] + 1} 位已按排除名单停止发送。")
+                    continue
+                eligible = [profile for profile in config["sender_profiles"] if profile["id"] not in disabled]
+                if not eligible:
+                    terminal_state = ("paused", "account_error")
+                    self.store.log(identifier, "所有选定账号不可用，请处理账号后继续。")
+                    return
+                available = [profile for profile in eligible if self.quota(profile)["count"] < profile["daily_limit"]]
+                if not available:
+                    terminal_state = ("paused", "quota")
+                    self.store.log(identifier, "所有账号的软件日预算已用尽，请次日继续。")
+                    return
+                chosen = None
+                for offset in range(len(available)):
+                    profile = available[(cursor + offset) % len(available)]
+                    if self.reserve(profile):
+                        chosen = profile
+                        cursor += 1
+                        break
+                if chosen is None:
+                    self.stop_event.wait(0.25)
+                    continue
+                _, attachment = self.service.attachment(config.get("attachment_id"))
+                self.store.execute("UPDATE recipients SET status='sending',attempts=attempts+1 WHERE id=?", (recipient["id"],))
+                sender = self.service.sender(chosen["id"], chosen)
+                prior = self.store.one("SELECT COUNT(*) AS n FROM attempts WHERE recipient_id=?", (recipient["id"],))["n"]
+                result = transport.send_attempt(sender=sender, recipient=dict(recipient, values=json.loads(recipient["row_values"]), demo_retry=bool(prior)),
+                    html_content=config["html_content"], subject=config["subject"], attachment_path=str(attachment) if attachment else None,
+                    add_unsubscribe=config["add_unsubscribe"], message_id=recipient["message_id"])
+                attempts = recipient["attempts"] + 1
+                retryable = result.status == "failed" and result.retryable and not result.account_error and attempts < 3
+                state = "pending" if retryable else result.status
+                if state not in {"pending", "accepted", "failed", "uncertain"}:
+                    raise ValueError("发送后端返回了未知状态。")
+                delay = (30 if attempts == 1 else 120) if retryable and not self.service.demo else 0
+                detail = result.detail[:500].replace(sender["password"], "[已隐藏]") if sender.get("password") else result.detail[:500]
+                with self.store.transaction() as db:
+                    db.execute("UPDATE recipients SET status=?,detail=?,next_attempt=? WHERE id=?",
+                               (state, detail, time.time() + delay, recipient["id"]))
+                    db.execute("INSERT INTO attempts(recipient_id,status,detail,code,created_at) VALUES(?,?,?,?,?)",
+                               (recipient["id"], result.status, detail, result.code, timestamp()))
+                    db.execute("UPDATE tasks SET updated_at=? WHERE id=?", (timestamp(), identifier))
+                    if result.permanent_address:
+                        db.execute("INSERT OR IGNORE INTO suppressions VALUES(?,?)", (recipient["email_key"], recipient["email"]))
+                if result.account_error:
+                    disabled.add(chosen["id"])
+                    self.store.execute("UPDATE recipients SET status='pending',attempts=0 WHERE id=?", (recipient["id"],))
+                    self.store.log(identifier, "一个账号认证或策略拒绝，已停用该账号并保留未接受对象。")
+                else:
+                    labels = {"accepted": "服务器已接收", "failed": "失败", "uncertain": "待确认", "pending": "暂时拒绝，等待重试"}
+                    self.store.log(identifier, f"第 {recipient['position'] + 1} 位：{labels[state]}。")
+                if self.service.demo:
+                    self.stop_event.wait(0.25)
+            terminal_state = ("paused", "manual")
+            self.store.log(identifier, "正在结束任务并关闭本轮连接。")
+        except BaseException as error:
+            terminal_state = None
+            self.runtime_errors[identifier] = f"任务已停止：{type(error).__name__}。未确认的提交不会自动重发。"
+            try:
+                with self.store.transaction() as db:
+                    db.execute("UPDATE recipients SET status='uncertain',detail=? WHERE task_id=? AND status='sending'",
+                               ("处理异常，提交结果不明，请人工确认。", identifier))
+                    db.execute("UPDATE tasks SET status='paused',pause_reason='error',updated_at=? WHERE id=?", (timestamp(), identifier))
+                self.store.log(identifier, self.runtime_errors[identifier])
+            except Exception:
+                pass
+        finally:
+            if transport:
+                try:
+                    transport.close_all_connections()
+                except Exception:
+                    pass
+            if terminal_state:
+                try:
+                    self.store.set_status(identifier, *terminal_state)
+                except Exception:
+                    self.runtime_errors[identifier] = "任务已停止，但结束状态未能保存，请检查磁盘后重新打开。"
+            self.task_id = None
+            self.lock.release()
 
-                # Time window enforcement
-                now_t = datetime.datetime.now().time()
-                while not (start_t <= now_t <= end_t) and self.is_running:
-                    self._log("当前时间不在发件允许窗口内，挂起等待...")
-                    time.sleep(60)
-                    now_t = datetime.datetime.now().time()
+    def test_send(self, config):
+        from .email_sender import render_email
+        from .service import mail_subject
+        if not self.lock.acquire(blocking=False):
+            raise ValueError("任务正在运行或停止中，暂不能测试发送。")
+        transport = None
+        try:
+            sender = self.service.sender(config["account_id"])
+            email = config.get("test_email", "").strip()
+            if not EmailSenderCore.validate_email(email):
+                raise ValueError("测试邮箱格式不正确。")
+            recipient = {"name": config.get("test_name") or "测试用户", "email": email, "values": config.get("values", {})}
+            subject = mail_subject(config)
+            subject = "AD 【测试】" + subject[3:] if subject.startswith("AD ") else "【测试】" + subject
+            render_email(subject, config.get("html_content", ""), recipient, sender, config.get("add_unsubscribe", True))
+            _, path = self.service.attachment(config.get("attachment_id"))
+            if not self.reserve(sender):
+                raise ValueError("此账号已达到发送预算或间隔，请稍后重试。")
+            transport = self.transport_factory()
+            result = transport.send_attempt(sender=sender, recipient=recipient, subject=subject,
+                html_content=config.get("html_content", ""), attachment_path=str(path) if path else None,
+                add_unsubscribe=config.get("add_unsubscribe", True))
+            detail = result.detail.replace(sender["password"], "[已隐藏]") if sender.get("password") else result.detail
+            return {"status": result.status, "detail": detail, "retryable": result.retryable, "account_error": result.account_error,
+                    "code": result.code, "permanent_address": result.permanent_address}
+        finally:
+            if transport:
+                transport.close_all_connections()
+            self.lock.release()
 
-                if not self.is_running:
-                    self._save_checkpoint(config, "paused")
-                    break
-
-                # 选择当日未超配额的发件账号；全部超限则暂停（可断点续传）
-                sender = self._pick_sender(senders, i, daily_limit)
-                if sender is None:
-                    self._log(f"⛔ 所有发件账号均已达到单日上限（{daily_limit} 封/账号），任务自动暂停。"
-                              f"请明日继续，或新增发件账号后续传。")
-                    self._save_checkpoint(config, "paused")
-                    self.is_running = False
-                    break
-                self.progress["current_account"] = sender["email"]
-
-                # Send
-                self._log(f"正在发送第 {i+1} 封至 {recipient['email']} (使用账号: {sender['email']})")
-                status, msg = self.sender_core.send_single(
-                    sender=sender,
-                    recipient=recipient,
-                    email_index=email_index,
-                    html_content=config['html_content'],
-                    subject=config['subject'],
-                    image_path=config.get('image_path'),
-                    attachment_path=config.get('attachment_path'),
-                    add_unsubscribe=add_unsubscribe
-                )
-
-                if status == "success":
-                    self.progress["sent"] += 1
-                    self.sent_emails.add(recipient["email"])
-                    self._bump_account(sender["email"])
-                    self._log(f"✅ 发送成功 - {msg}")
-                elif status == "uncertain":
-                    # 连接中断，投递状态未知：不计成功、不写入已发集合（续传会重试）
-                    self.progress["uncertain"] += 1
-                    self._bump_account(sender["email"])  # 仍占用账号配额（可能已发出）
-                    self._log(f"⚠️ 投递状态未知（连接中断）→ {recipient['email']} - {msg}")
-                    self.uncertain_recipients.append({
-                        "name": recipient["name"],
-                        "email": recipient["email"],
-                        "reason": "投递状态未知",
-                        "detail": msg,
-                        "time": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                        "sender_used": sender["email"]
-                    })
-                else:  # failed
-                    self.progress["failed"] += 1
-                    reason = self._classify_error(msg)
-                    self._log(f"❌ 发送失败 [{reason}] → {recipient['email']} - {msg}")
-                    self.failed_recipients.append({
-                        "name": recipient["name"],
-                        "email": recipient["email"],
-                        "reason": reason,
-                        "detail": msg,
-                        "time": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                        "sender_used": sender["email"]
-                    })
-
-                # ETA 估算：本轮已处理数 / 已耗时 → 速率 → 剩余时间
-                done_this_run += 1
-                self._update_eta(done_this_run, i + 1, total)
-
-                # 每发完一封即原子化落盘，断网/断电最多只丢失/重发一封
-                self._save_checkpoint(config, "running")
-
-                email_index += 1
-
-                if i < total - 1 and self.is_running:
-                    if (i + 1) % batch_size == 0:
-                        # Fatigue-increasing interval: the longer we send, the slower we go
-                        fatigue_factor = 1.0 + (self.progress["sent"] // 50) * 0.15
-                        adjusted_min = int(base_min * fatigue_factor)
-                        adjusted_max = int(base_max * fatigue_factor)
-                        wait_sec = random.randint(adjusted_min, adjusted_max)
-                        
-                        if fatigue_factor > 1.0:
-                            self._log(f"疲劳递增机制：已发送 {self.progress['sent']} 封，疲劳因子 x{fatigue_factor:.2f}，休眠 {wait_sec} 秒...")
-                        else:
-                            self._log(f"防封锁机制：单批次发送完毕，随机休眠 {wait_sec} 秒...")
-                        time.sleep(wait_sec)
-                    else:
-                        # Micro-jitter between emails in same batch (0.3~1.5s)
-                        time.sleep(random.uniform(0.3, 1.5))
-
-            # 循环正常跑完（未被手动终止）→ 标记任务完成
-            if self.is_running:
-                self._save_checkpoint(config, "done")
-
-        except Exception as e:
-            self._log(f"发生了严重的结构性错误: {str(e)}")
-            import traceback
-            self.logger.error(traceback.format_exc())
-            # 异常中断也落盘为 paused，便于排查后续传
-            self._save_checkpoint(config, "paused")
-
-        # Clean up SMTP connections
-        self.sender_core.close_all_connections()
-        self._log("所有 SMTP 连接已安全关闭。")
-
-        # Summary report
-        if self.failed_recipients or self.uncertain_recipients:
-            self._log(f"⚠️ 本次失败 {len(self.failed_recipients)} 个、待确认 {len(self.uncertain_recipients)} 个，"
-                      f"可点击「导出失败记录」下载清单，或「重发失败/待确认」一键重试。")
-
-        self.is_running = False
-        self._log("营销计划执行完毕。")
+    def shutdown(self, timeout=5):
+        self.stop_event.set()
+        if self.thread and self.thread.is_alive():
+            self.thread.join(timeout)
