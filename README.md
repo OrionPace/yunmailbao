@@ -4,7 +4,7 @@
 
 [源码](https://github.com/OrionPace/yunmailbao) · [版本与下载](https://github.com/OrionPace/yunmailbao/releases) · [运行指南](docs/deployment-guide.md)
 
-当前源码为 `0.3.0`，已完成本机源码回归；新版安装包尚未构建和发布。
+当前源码为 `0.2.1`，已完成本机源码回归；新版安装包尚未构建和发布。
 
 ## 能做什么
 
@@ -40,7 +40,7 @@ uv run python main.py --headless --demo --port 8131
 
 ## 界面
 
-以下是 `0.3.0` 源码版的实际界面，使用虚构数据。
+以下是 `0.2.1` 源码版的实际界面，使用虚构数据。
 
 ![邮件编辑](docs/screenshots/07-editor.png)
 ![简化账号设置](docs/screenshots/08-account-simple.png)
@@ -54,4 +54,4 @@ uv run python main.py --headless --demo --port 8131
 
 ## 许可
 
-原创代码采用 [GPL-3.0-only](LICENSE)，第三方组件与字体遵循各自许可，见 [第三方声明](THIRD_PARTY_NOTICES.md)。原有许可未决项未解除，`0.3.0` 不因此自动公开发布。请勿提交真实授权码、名单或运行数据。
+原创代码采用 [GPL-3.0-only](LICENSE)，第三方组件与字体遵循各自许可，见 [第三方声明](THIRD_PARTY_NOTICES.md)。原有许可未决项未解除，`0.2.1` 不因此自动公开发布。请勿提交真实授权码、名单或运行数据。

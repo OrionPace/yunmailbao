@@ -1,4 +1,4 @@
-"""Isolated Windows 0.2 -> 0.3 installation check; never request SMTP sending."""
+"""Isolated Windows 0.2.0 -> 0.2.1 installation check; never request SMTP sending."""
 
 import argparse
 import contextlib
@@ -108,7 +108,7 @@ def run():
     task_id = None
     frozen = None
     try:
-        for version, candidate in (("0.2.0", old_candidate), ("0.3.0", ROOT / ".build/candidate/YunYouBao")):
+        for version, candidate in (("0.2.0", old_candidate), ("0.2.1", ROOT / ".build/candidate/YunYouBao")):
             package = base / version
             package.mkdir(exist_ok=True)
             hidden([iscc, *specs, "--define=AppVersion=" + version,
@@ -146,7 +146,7 @@ def run():
                     assert any(item["id"] == draft["id"] for item in api(client, "GET", "drafts")["drafts"])
         env = dict(os.environ, YUNYOUBAO_SMOKE_DATA_DIR=str(data))
         subprocess.run(["node", "tests/browser/installed.cjs", str(installed / "YunYouBao.exe"),
-                        "release/0.3.0/build-manifest.json"], cwd=ROOT, env=env, check=True, timeout=120)
+                        "release/0.2.1/build-manifest.json"], cwd=ROOT, env=env, check=True, timeout=120)
     finally:
         if registration() is not None:
             assert registration() == installed and installed.is_relative_to(base)
@@ -154,7 +154,7 @@ def run():
             assert registration() is None and not (installed / "YunYouBao.exe").exists()
         assert hashlib.sha256(real_executable.read_bytes()).hexdigest() == real_hash, "Real installation changed"
     assert (data / "live/yunyoubao.sqlite3").is_file(), "Uninstall removed synthetic user data"
-    report = {"upgrade": "0.2.0 -> 0.3.0", "account_and_dpapi_preserved": True,
+    report = {"upgrade": "0.2.0 -> 0.2.1", "account_and_dpapi_preserved": True,
               "draft_preserved": True, "frozen_task_preserved": True, "isolated_uninstall": True,
               "real_installation_unchanged": True, "smtp": "no send requested"}
     (base / "report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")

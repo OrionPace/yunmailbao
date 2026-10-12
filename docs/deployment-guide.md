@@ -2,7 +2,7 @@
 
 **本版不支持公网部署。** 不要将应用端口暴露到公网或局域网，不放行旧版 8123，也不以 Nginx/域名/HTTPS 代替登录与权限设计。会话令牌及 Host/Origin 校验只服务于本机边界。
 
-[源码](https://github.com/OrionPace/yunmailbao)与[发布入口](https://github.com/OrionPace/yunmailbao/releases)使用新仓库名，本地工作目录仍为 `auto_email`。当前准备 `0.3.0` 候选，不代表安装或公开分发许可已经验收。
+[源码](https://github.com/OrionPace/yunmailbao)与[发布入口](https://github.com/OrionPace/yunmailbao/releases)使用新仓库名，本地工作目录仍为 `auto_email`。当前准备 `0.2.1` 候选，不代表安装或公开分发许可已经验收。
 
 ## Windows 桌面
 
@@ -67,15 +67,15 @@ uv run python -B tests/manual_email_smoke.py
 .\build.bat
 ```
 
-单元测试与手动烟测使用替身/模拟传输，不读取根 `.env`。2026-10-12 已通过 92 项回归、47 项专项 UI 检查、完整浏览器模拟链及源码 WebView2 烟测；尚未进行 0.3.0 构建与安装验收。
+单元测试与手动烟测使用替身/模拟传输，不读取根 `.env`。2026-10-12 已通过 92 项回归、47 项专项 UI 检查、完整浏览器模拟链及源码 WebView2 烟测；尚未进行 0.2.1 构建与安装验收。
 
-构建需要 Python 3.12 x64、uv 和 `.tools\InnoSetup\ISCC.exe` 中的 Inno Setup 7.1.0。版本由 `pyproject.toml` 的 `project.version` 读取，须与 `main.py` 保持一致；本轮目标为 `0.3.0`。
+构建需要 Python 3.12 x64、uv 和 `.tools\InnoSetup\ISCC.exe` 中的 Inno Setup 7.1.0。版本由 `pyproject.toml` 的 `project.version` 读取，须与 `main.py` 保持一致；本轮目标为 `0.2.1`。
 
 构建按锁文件新建 `.build\candidate\YunYouBao\` 和 `.build\work\`，写入来源清单后生成以下候选目标，不从旧 `dist\` / `dist_release\` / `dist_candidate\` 拼包：
 
-- `release\0.3.0\云邮宝-0.3.0-setup.exe`
-- `release\0.3.0\build-manifest.json`
-- `release\0.3.0\SHA256SUMS.txt`
+- `release\0.2.1\云邮宝-0.2.1-setup.exe`
+- `release\0.2.1\build-manifest.json`
+- `release\0.2.1\SHA256SUMS.txt`
 
 `release\0.2.0\` 保留；同版本旧产物进入对应版本的 `archive/<时间>/`，不覆盖归档。`scripts/build_release.ps1 -PackageOnly` 只接受有完整来源清单且哈希匹配的候选。隔离安装烟测应使用独立 AppId、快捷方式名称及安装目录，不改变正式安装身份。
 

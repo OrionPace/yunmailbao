@@ -339,6 +339,17 @@ async function main() {
       const preview = await previewResponse.json(); assert.match(preview.subject, /\bAD\b/);
       await page.waitForFunction(() => document.querySelector('#preview-subject')?.textContent.includes('AD'));
       assert.match(await page.frameLocator('#preview-frame').locator('body').innerText(), /\u9000\u8ba2/);
+      assert.equal(await page.locator('#preview-frame').getAttribute('sandbox'), '');
+      const font = await page.frameLocator('#preview-frame').locator('body').evaluate(async () => {
+        const faces = await document.fonts.load('14px "Source Han Sans SC"');
+        return {loaded: faces.length, status: faces[0]?.status,
+          family: getComputedStyle(document.body).fontFamily,
+          csp: document.querySelector('meta[http-equiv="Content-Security-Policy"]').content};
+      });
+      assert.equal(font.loaded, 1); assert.equal(font.status, 'loaded');
+      assert.match(font.family, /Source Han Sans SC/);
+      assert.match(font.csp, /default-src 'none'/); assert.match(font.csp, /font-src data:/);
+      assert.match(font.csp, /form-action 'none'/); assert.match(font.csp, /base-uri 'none'/);
       await page.click('#preview-done');
       await page.locator('#commercial').uncheck(); assert(await page.locator('#unsubscribe').isEnabled());
       return {preview_subject: preview.subject};

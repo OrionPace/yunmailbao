@@ -19,7 +19,7 @@ from fastapi.staticfiles import StaticFiles
 
 from core.service import MAX_BACKUP, MAX_UPLOAD, ProductService
 
-VERSION = "0.3.0"
+VERSION = "0.2.1"
 BASE_DIR = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
 
 

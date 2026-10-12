@@ -567,6 +567,23 @@
     });
     $('attachment-file').value = '';
   }
+  let previewFont;
+  function loadPreviewFont() {
+    if (!previewFont) {
+      // Embed our local font: the preview keeps an opaque origin and no network access.
+      previewFont = fetch('/static/fonts/SourceHanSansCN-VF.ttf.woff2').then(async response => {
+        if (!response.ok) throw new Error('预览字体加载失败，请重试。');
+        const blob = await response.blob();
+        return new Promise((resolve,reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result);
+          reader.onerror = () => reject(new Error('预览字体读取失败，请重试。'));
+          reader.readAsDataURL(blob);
+        });
+      }).catch(error => { previewFont = null; throw error; });
+    }
+    return previewFont;
+  }
   async function openPreview() {
     if (!config().html_content) throw new Error('请先填写邮件正文。');
     await runPreflight();
@@ -585,12 +602,13 @@
       try {
         await busy($('preview-update'),async () => {
           const result = await api('/preview-email',{method:'POST',body:{...config(),recipient_index:index}});
+          const font = await loadPreviewFont();
           if (current !== sequence || !$('preview-frame')) return;
           state.previewIndex = index;
           $('preview-subject').textContent = result.subject || '';
           const recipient = typeof result.recipient === 'string' ? result.recipient : [result.recipient?.name,result.recipient?.email].filter(Boolean).join(' · ');
           $('preview-meta').textContent = recipient + (result.attachment_name ? ' | 附件：' + result.attachment_name : '');
-          $('preview-frame').srcdoc = '<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src \'none\'; img-src data:; style-src \'unsafe-inline\'; font-src \'none\'; form-action \'none\'; base-uri \'none\'"><style>body{font:14px/1.8 Arial,sans-serif;padding:18px;color:#202429;overflow-wrap:anywhere}img{max-width:100%}table{max-width:100%}</style></head><body>' + (result.html_content || esc(result.text_content || '')) + '</body></html>';
+          $('preview-frame').srcdoc = '<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src \'none\'; img-src data:; style-src \'unsafe-inline\'; font-src data:; form-action \'none\'; base-uri \'none\'"><style>@font-face{font-family:"Source Han Sans SC";src:url("' + font + '") format("woff2");font-weight:100 900}body{font:14px/1.8 "Source Han Sans SC",sans-serif;padding:18px;color:#202429;overflow-wrap:anywhere}img{max-width:100%}table{max-width:100%}</style></head><body>' + (result.html_content || esc(result.text_content || '')) + '</body></html>';
           const unresolved = (result.subject || '') + ' ' + (result.html_content || '');
           if (/\{\{[^{}]+\}\}|&lt;人名&gt;|<人名>/.test(unresolved)) modalError('样例含未解析变量，请核对变量列与空值。');
         });
