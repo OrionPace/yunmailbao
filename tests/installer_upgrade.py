@@ -63,7 +63,7 @@ def application(executable, data):
                         raise
                     time.sleep(0.2)
             boot = json.loads(re.search(r"window\.YUNYOUBAO=(\{.*?\});", page.text).group(1))
-            client.headers.update(Authorization="Bearer " + boot["token"], **{"X-Yunyoubao-Mode": "live"})
+            client.headers.update({"Authorization": "Bearer " + boot["token"], "X-Yunyoubao-Mode": "live"})
             yield client
     finally:
         if process.poll() is None:

@@ -67,7 +67,7 @@ uv run python -B tests/manual_email_smoke.py
 .\build.bat
 ```
 
-单元测试与手动烟测使用替身/模拟传输，不读取根 `.env`。2026-10-12 已通过 92 项回归、47 项专项 UI 检查、完整浏览器模拟链及源码 WebView2 烟测；尚未进行 0.2.1 构建与安装验收。
+单元测试与手动烟测使用替身/模拟传输，不读取根 `.env`。2026-10-12 已通过 92 项回归、47 项专项 UI 检查、完整浏览器模拟链及源码 WebView2 烟测；0.2.1 已完整构建，冻结 EXE 的 916 个文件、字体、账号重开及隔离升级/卸载验收通过。
 
 构建需要 Python 3.12 x64、uv 和 `.tools\InnoSetup\ISCC.exe` 中的 Inno Setup 7.1.0。版本由 `pyproject.toml` 的 `project.version` 读取，须与 `main.py` 保持一致；本轮目标为 `0.2.1`。
 
@@ -79,8 +79,8 @@ uv run python -B tests/manual_email_smoke.py
 
 `release\0.2.0\` 保留；同版本旧产物进入对应版本的 `archive/<时间>/`，不覆盖归档。`scripts/build_release.ps1 -PackageOnly` 只接受有完整来源清单且哈希匹配的候选。隔离安装烟测应使用独立 AppId、快捷方式名称及安装目录，不改变正式安装身份。
 
-官方 `2.005R` 字体及 OFL 原文保存在 `static/fonts/`，来源和 SHA-256 见 [第三方声明](../THIRD_PARTY_NOTICES.md)。打包及安装后还需确认字体和原文确实随包、字节一致，不能用源码文件存在替代工件验收。
+官方 `2.005R` 字体及 OFL 原文保存在 `static/fonts/`，来源和 SHA-256 见 [第三方声明](../THIRD_PARTY_NOTICES.md)。本机隔离安装已逐文件校验字体与原文，并确认编辑器和隔离预览中的字体实际加载。
 
-构建成功不等于 tag 或 GitHub Release 已发布。干净机器首装、0.2 → 0.3 升级、卸载、WebView2、离线编辑、数据恢复、字体加载与原生导出仍待主 agent 的实际结果；原有第三方许可未决项未解决前不自动公开发布。
+构建成功不等于 tag 或 GitHub Release 已发布。0.2.0 → 0.2.1 隔离升级、卸载留数据、原生两次重开、中文许可及目录选择已通过，实际用户安装仍未覆盖。干净 Windows、缺失 WebView2、运行中升级拦截和本版原生导出对话框仍待验收；原有第三方许可未决项未解决前不自动公开发布。完整状态见 [阶段交接](HANDOFF.md)。
 
 旧数据仅经应用只读导入供核对，不迁移授权码，不能直接续发；先保留备份，不删除原目录。策略依据及本轮待核验项见 [产品说明](PRODUCT.md)。

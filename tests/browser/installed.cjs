@@ -10,12 +10,13 @@ const {chromium} = require('playwright');
 async function stopNative(window) {
   if (!window) return;
   if (window.browser) await window.browser.close().catch(() => {});
-  if (window.child.exitCode === null && window.child.pid) {
+  if (window.child.exitCode === null && window.child.signalCode === null && window.child.pid) {
+    const exited = new Promise(resolve => window.child.once('exit', resolve));
     window.child.kill();
-    await Promise.race([new Promise(resolve => window.child.once('exit', resolve)),
+    await Promise.race([exited,
       new Promise(resolve => setTimeout(resolve, 5000))]);
   }
-  assert.notEqual(window.child.exitCode, null, 'Owned application did not exit');
+  assert(window.child.exitCode !== null || window.child.signalCode !== null, 'Owned application did not exit');
 }
 
 async function startNative(executable, root, demo) {
@@ -121,6 +122,16 @@ async function run() {
     assert(await page.locator('.ql-editor').isVisible());
     await page.locator('.ql-editor').fill('Installed rich text editor check');
     assert.equal(await page.locator('.ql-editor').innerText(), 'Installed rich text editor check');
+    await page.fill('#subject', 'Installed preview check');
+    await page.click('#editor-preview');
+    await page.frameLocator('#preview-frame').locator('meta[http-equiv="Content-Security-Policy"]').waitFor({state: 'attached'});
+    const previewFont = await page.frameLocator('#preview-frame').locator('body').evaluate(async () => {
+      const faces = await document.fonts.load('14px "Source Han Sans SC"');
+      return faces.length === 1 && faces[0].status === 'loaded';
+    });
+    assert(previewFont, 'Isolated preview font must load in installed WebView2');
+    assert.equal(await page.locator('#preview-frame').getAttribute('sandbox'), '');
+    await page.click('#preview-done');
     await page.screenshot({path: path.join(output, 'installed-editor.png')});
     assert.deepEqual(errors, []);
     const saved = await api(page, 'accounts', {id: 'native-restart-fixture', email: 'native-restart@example.test',
@@ -143,7 +154,7 @@ async function run() {
     assert.deepEqual(sends, [], 'Native smoke must never request any send');
     const report = {executable, verified_files: manifest.candidate_files.length,
       ...state, demonstration_rows: 32, page_errors: errors, font_loaded: font,
-      account_restart: true, origins: [firstOrigin, new URL(window.page.url()).origin],
+      preview_font_loaded: previewFont, account_restart: true, origins: [firstOrigin, new URL(window.page.url()).origin],
       smtp: 'no send requested; synthetic data only'};
     fs.writeFileSync(path.join(output, 'report.json'), JSON.stringify(report, null, 2));
     console.log(JSON.stringify(report));

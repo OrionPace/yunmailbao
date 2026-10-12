@@ -4,7 +4,7 @@
 
 [源码](https://github.com/OrionPace/yunmailbao) · [版本与下载](https://github.com/OrionPace/yunmailbao/releases) · [运行指南](docs/deployment-guide.md)
 
-当前源码为 `0.2.1`，已完成本机源码回归；新版安装包尚未构建和发布。
+当前版本为 `0.2.1` 候选，本地安装包已构建；尚未正式发布。
 
 ## 能做什么
 
