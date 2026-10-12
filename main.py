@@ -19,7 +19,7 @@ from fastapi.staticfiles import StaticFiles
 
 from core.service import MAX_BACKUP, MAX_UPLOAD, ProductService
 
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 BASE_DIR = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
 
 
@@ -114,6 +114,15 @@ def create_app(data_root=None, transport_factory=None, initial_mode="live", desk
         request.state.service.delete_account(identifier)
         return {"status": "success"}
 
+    @application.get("/api/account-selection")
+    def account_selection(request: Request):
+        selected = request.state.service.account_selection()
+        return {"account_ids": selected or [], "configured": selected is not None}
+
+    @application.put("/api/account-selection")
+    def save_account_selection(request: Request, data: dict):
+        return {"account_ids": request.state.service.save_account_selection(data.get("account_ids", [])), "configured": True}
+
     @application.post("/api/imports")
     async def upload_import(request: Request, file: UploadFile = File(...)):
         content = await file.read(MAX_UPLOAD + 1)
@@ -201,7 +210,7 @@ def create_app(data_root=None, transport_factory=None, initial_mode="live", desk
 
     @application.get("/api/data")
     def data_info(request: Request):
-        return request.state.service.data_info()
+        return dict(request.state.service.data_info(), version=VERSION)
 
     @application.post("/api/data/backup")
     def backup(request: Request):

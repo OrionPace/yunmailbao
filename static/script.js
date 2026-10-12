@@ -10,7 +10,9 @@
     generation: 0, preflightSequence: 0, accounts: [], accountIds: [], attachment: null,
     tasks: [], task: null, taskOffset: 0, taskLimit: 20, selectedRecipients: new Set(),
     draftId: null, dirty: false, variableTarget: 'body', previewIndex: 0, poll: null, taskSequence: 0,
-    actionBusy: false, uploading: false, mailRevision: 0, testResult: null
+    actionBusy: false, uploading: false, mailRevision: 0, testResult: null,
+    sourceNote: '', selectionLoaded: false, selectionVersion: 0,
+    mailDefaults: {font:'Source Han Sans SC',size:'14px',lineheight:'1.8'}
   };
   const labels = {
     ready:'待启动', starting:'正在启动', running:'运行中', stopping:'正在暂停', paused:'已暂停',
@@ -24,11 +26,14 @@
   const pauseText = reason => ({
     manual:'已按请求安全暂停', window:'当前不在发送窗口内，等待窗口开放',
     account_error:'账号认证或服务商限制，请检查账号并测试',
+    temporary_rejection:'连续三次临时拒绝，任务已暂停；请核对服务商提示后继续',
+    provider_rate_limit:'服务商返回 4.7.28 限流；至少等待 10 分钟并排查原因后继续',
     quota:'账号预算已用尽，请检查额度或稍后继续',
     error:'发送异常，请检查任务日志', storage_error:'数据保存异常，请检查磁盘与权限',
     retry:'所选记录已进入人工重发队列'
   }[reason] || reason);
-  let quill, preflightTimer, toastTimer, drawerFocus, modalFocus;
+  let quill, editorRange = {index:0,length:0}, preflightTimer, toastTimer, drawerFocus, modalFocus;
+  let selectionWrites = Promise.resolve();
   const icons = () => window.lucide && window.lucide.createIcons();
   function badge(status) {
     const tone = ['accepted','sendable','valid','completed'].includes(status) ? 'good' :
@@ -140,11 +145,48 @@
       sheet: $('sheet').value, name_column: $('name-column').value, email_column: $('email-column').value,
       filters: state.filters.filter(f => f.values.length).map(f => ({column:f.column,values:[...f.values]})),
       revision: state.revision, subject: $('subject').value.trim(),
-      html_content: quill && (quill.getText().trim() || quill.root.querySelector('img')) ? quill.root.innerHTML : '',
+      html_content: mailHTML(),
       attachment_id: state.attachment?.attachment_id || null, account_ids: [...state.accountIds],
       start_time: $('start-time').value, end_time: $('end-time').value,
-      add_unsubscribe: $('unsubscribe').checked, purpose: $('purpose').value, source_note: $('source-note').value.trim()
+      add_unsubscribe: $('commercial').checked || $('unsubscribe').checked,
+      purpose: $('commercial').checked ? 'promotion' : 'notification', source_note: state.sourceNote
     };
+  }
+  function mailHTML() {
+    if (!quill || !(quill.getText().trim() || quill.root.querySelector('img'))) return '';
+    const wrapper = document.createElement('div');
+    wrapper.dataset.yunmailbaoBody = '1';
+    wrapper.style.fontFamily = state.mailDefaults.font + ', "Microsoft YaHei", sans-serif';
+    wrapper.style.fontSize = state.mailDefaults.size;
+    wrapper.style.lineHeight = state.mailDefaults.lineheight;
+    wrapper.innerHTML = quill.root.innerHTML;
+    wrapper.querySelectorAll('[class]').forEach(el => {
+      for (const cls of [...el.classList]) {
+        if (cls.startsWith('ql-align-')) el.style.textAlign = cls.slice(9);
+        if (/^ql-indent-\d+$/.test(cls)) el.style.paddingLeft = Number(cls.slice(10)) * 3 + 'em';
+        if (cls === 'ql-direction-rtl') el.style.direction = 'rtl';
+      }
+    });
+    return wrapper.outerHTML;
+  }
+  function legacyVariables(value, nameColumn) {
+    return String(value || '').replace(/(?:<人名>|&lt;人名&gt;|&#0*60;人名&#0*62;|&#x0*3c;人名&#x0*3e;)/gi,
+      () => '{{' + (nameColumn || '姓名') + '}}');
+  }
+  function loadMail(html) {
+    const content = document.createElement('div'); content.innerHTML = html || '';
+    const wrapper = content.firstElementChild;
+    state.mailDefaults = {font:'Source Han Sans SC',size:'14px',lineheight:'1.8'};
+    if (content.children.length === 1 && wrapper?.hasAttribute('data-yunmailbao-body')) {
+      const family = wrapper.style.fontFamily.split(',')[0].trim().replace(/^["']|["']$/g,'');
+      if (Quill.import('attributors/style/font').whitelist.includes(family)) state.mailDefaults.font = family;
+      if (Quill.import('attributors/style/size').whitelist.includes(wrapper.style.fontSize)) state.mailDefaults.size = wrapper.style.fontSize;
+      if (['1.25','1.5','1.8','2'].includes(wrapper.style.lineHeight)) state.mailDefaults.lineheight = wrapper.style.lineHeight;
+      content.innerHTML = wrapper.innerHTML;
+    }
+    Object.assign(quill.root.style,{fontFamily:state.mailDefaults.font,fontSize:state.mailDefaults.size,lineHeight:state.mailDefaults.lineheight});
+    quill.clipboard.dangerouslyPasteHTML(content.innerHTML,'silent');
+    quill.history.clear(); editorRange = {index:0,length:0}; updateEditorTools();
   }
   function navigate(view) {
     state.view = view;
@@ -288,7 +330,6 @@
       if (!state.columns.includes(v)) issues.push('名单中不存在变量列：' + v);
     });
     if (/\{\{|\}\}/.test(text.replace(/\{\{[^{}]+\}\}/g,''))) issues.push('变量括号不完整');
-    if (text.includes('<人名>') && !$('name-column').value) issues.push('兼容姓名变量需要选择姓名列');
     return issues;
   }
   function renderContentIssues() {
@@ -304,7 +345,7 @@
       {ok:contentIssues().length === 0,text:'邮件内容与变量',detail:contentIssues().join('；') || '主题、正文和变量列完整'},
       {ok:c.account_ids.length > 0 && state.accounts.filter(a => c.account_ids.includes(a.id)).every(a => a.has_secret !== false),text:'发件账号',detail:c.account_ids.length + ' 个已选账号；缺失授权码需重新填写'},
       {ok:/^\d{2}:\d{2}$/.test(c.start_time) && /^\d{2}:\d{2}$/.test(c.end_time),text:'发送窗口',detail:c.start_time === c.end_time ? '全天发送窗口' : c.start_time + '–' + c.end_time + (c.start_time > c.end_time ? '（跨日）' : '')},
-      {ok:c.purpose !== 'promotion' || (!!c.source_note && c.add_unsubscribe),text:'授权与退订',detail:c.purpose === 'promotion' ? '推广邮件须填写名单来源并添加退订信息' : '事务通知'}
+      {ok:c.purpose !== 'promotion' || c.add_unsubscribe,text:'授权与退订',detail:c.purpose === 'promotion' ? '商业推广：主题标记 AD，强制添加退订信息；请确认收件人授权' : '事务通知'}
     ];
   }
   function renderReview() {
@@ -323,26 +364,52 @@
       el.value = el.value.slice(0,start) + value + el.value.slice(end);
       el.focus(); el.setSelectionRange(start + value.length,start + value.length); markDirty();
     } else {
-      const range = quill.getSelection(true) || {index:quill.getLength() - 1,length:0};
+      const range = quill.getSelection() || editorRange;
+      quill.setSelection(range,'silent');
       if (range.length) quill.deleteText(range.index,range.length,'user');
       quill.insertText(range.index,value,'user'); quill.setSelection(range.index + value.length,0);
     }
   }
   async function loadAccounts() {
+    const mode = state.mode, version = state.selectionVersion;
     const data = await api('/accounts');
     state.accounts = (data.accounts || []).map(a => {
       const {password, token, ...safe} = a;
       return safe;
     });
-    state.accountIds = state.accountIds.filter(id => state.accounts.some(a => a.id === id));
+    if (!state.selectionLoaded) {
+      try {
+        const preference = await api('/account-selection');
+        if (mode !== state.mode || version !== state.selectionVersion) return;
+        state.selectionLoaded = true;
+        state.accountIds = state.accounts.filter(a => a.has_secret === true && (preference.account_ids || []).map(String).includes(String(a.id))).map(a => a.id);
+        const usable = state.accounts.filter(a => a.has_secret === true);
+        if (preference.configured === false && usable.length === 1) {
+          state.accountIds = [usable[0].id]; persistAccountSelection();
+        }
+      } catch (error) {
+        if (error.name === 'AbortError') throw error;
+        toast('无法读取已保存的账号选择：' + safeError(error) + '；请手动选择，本次选择尚未恢复。');
+      }
+    }
+    state.accountIds = state.accountIds.filter(id => state.accounts.some(a => String(a.id) === String(id)));
     renderAccounts(); renderReview();
+  }
+  function persistAccountSelection() {
+    state.selectionLoaded = true; state.selectionVersion++;
+    const mode = state.mode, account_ids = state.accountIds.map(String);
+    selectionWrites = selectionWrites.catch(() => {}).then(async () => {
+      const response = await fetch('/api/account-selection',{method:'PUT',headers:{...authHeaders(mode),'Content-Type':'application/json'},body:JSON.stringify({account_ids})});
+      if (!response.ok) throw new Error('HTTP ' + response.status);
+    }).catch(error => toast('账号选择未保存，请重新勾选后重试：' + safeError(error)));
+    return selectionWrites;
   }
   function renderAccounts() {
     $('accounts').innerHTML = state.accounts.length ? state.accounts.map(a =>
       '<div class="account-row"><input type="checkbox" data-account-select="' + esc(a.id) + '" aria-label="选择 ' + esc(a.email) + '"' +
       (state.accountIds.includes(a.id) ? ' checked' : '') + '><div><strong>' + esc(a.name || a.email) +
-      '</strong><div class="muted">' + esc(a.email) + ' · ' + esc(a.smtp_host) + ':' + Number(a.smtp_port) + ' · ' + esc(a.security) +
-      '</div><div class="muted">每分钟 ' + Number(a.per_minute ?? 6) + ' 封 / 每日 ' + Number(a.daily_limit ?? 200) + ' 封' +
+      '</strong><div class="muted">' + esc(a.email) +
+      '</div><div class="muted">约 ' + (60 / Number(a.per_minute || 6)).toFixed(1).replace(/\.0$/,'') + ' 秒 / 封 · 软件预算每日 ' + Number(a.daily_limit ?? 200) + ' 封' +
       (a.remember === false ? ' · 不记住授权码' : '') + (a.has_secret === false ? ' · 授权码缺失' : '') + '</div></div><div class="inline"><button data-account-edit="' + esc(a.id) +
       '" class="icon" title="编辑账号" aria-label="编辑账号">' + icon('pencil') + '</button><button data-account-delete="' + esc(a.id) +
       '" class="icon danger" title="删除账号" aria-label="删除账号">' + icon('trash-2') + '</button></div></div>').join('') :
@@ -352,21 +419,24 @@
   }
   function accountEditor(account) {
     const a = account || {email:'',name:'',smtp_host:'smtp.qq.com',smtp_port:465,security:'ssl',remember:true,per_minute:6,daily_limit:200};
-    const preset = a.smtp_host === 'smtp.qq.com' ? 'qq' : a.smtp_host === 'smtp.163.com' ? '163' : 'custom';
+    const preset = Number(a.smtp_port) === 465 && a.security === 'ssl' ?
+      (a.smtp_host === 'smtp.qq.com' ? 'qq' : a.smtp_host === 'smtp.163.com' ? '163' : 'custom') : 'custom';
     openModal(account ? '编辑发件账号' : '新增发件账号', '<form id="account-form">' +
       '<div class="fields two"><label>邮箱服务<select id="account-preset"><option value="qq">QQ 邮箱</option><option value="163">163 邮箱</option><option value="custom">自定义 SMTP</option></select></label><label>发件人名称<input id="account-name" value="' + esc(a.name) + '" maxlength="100"></label></div>' +
       '<label>邮箱地址<input id="account-email" type="email" required value="' + esc(a.email) + '" autocomplete="off"' + (account ? ' readonly title="修改邮箱请新增账号"' : '') + '></label>' +
       '<label class="separated">SMTP 授权码' + (account ? '（留空保留现有授权码）' : '') + '<div class="password-field"><input id="account-password" type="password" autocomplete="new-password"' +
       (account ? '' : ' required') + '><button type="button" id="password-toggle" class="icon" title="显示授权码" aria-label="显示授权码">' + icon('eye') + '</button></div></label>' +
+      '<label class="check separated"><input id="account-remember" type="checkbox"' + (a.remember !== false ? ' checked' : '') + '>记住授权码</label>' +
+      '<details id="account-advanced" class="advanced"' + (preset === 'custom' ? ' open' : '') + '><summary>高级参数与软件预算</summary>' +
       '<div class="fields three separated"><label>SMTP 主机<input id="account-host" required value="' + esc(a.smtp_host) + '"></label><label>端口<input id="account-port" type="number" min="1" max="65535" required value="' +
       Number(a.smtp_port) + '"></label><label>连接安全<select id="account-security"><option value="ssl">SSL / TLS</option><option value="starttls">STARTTLS</option></select></label></div>' +
-      '<div class="fields two"><label>每分钟上限<input id="account-minute" type="number" min="1" max="120" required value="' + Number(a.per_minute ?? 6) +
-      '"></label><label>每日上限<input id="account-daily" type="number" min="1" max="100000" required value="' + Number(a.daily_limit ?? 200) + '"></label></div>' +
-      '<label class="check"><input id="account-remember" type="checkbox"' + (a.remember !== false ? ' checked' : '') +
-      '>记住授权码</label><div class="modal-actions"><button type="button" id="account-cancel">取消</button><button type="submit" id="account-submit" class="primary">' + icon('save') + '保存账号</button></div></form>');
+      '<div class="fields two"><label>软件每分钟预算<input id="account-minute" type="number" min="1" max="120" required value="' + Number(a.per_minute ?? 6) +
+      '"></label><label>软件每日预算<input id="account-daily" type="number" min="1" max="100000" required value="' + Number(a.daily_limit ?? 200) + '"></label></div><p class="muted">预算是软件设置，不代表服务商额度。</p></details>' +
+      '<div class="modal-actions"><button type="button" id="account-cancel">取消</button><button type="submit" id="account-submit" class="primary">' + icon('save') + '保存账号</button></div></form>');
     $('account-preset').value = preset; $('account-security').value = a.security || 'ssl';
     $('account-preset').onchange = () => {
       const v = $('account-preset').value;
+      $('account-advanced').open = v === 'custom';
       if (v === 'qq' || v === '163') {
         $('account-host').value = 'smtp.' + (v === 'qq' ? 'qq.com' : '163.com');
         $('account-port').value = '465'; $('account-security').value = 'ssl';
@@ -391,7 +461,7 @@
         await busy($('account-submit'),async () => {
           const result = accountResult(await api('/accounts',{method:'POST',body}));
           $('account-password').value = '';
-          if (!account && result.id !== undefined) state.accountIds.push(result.id);
+          if (!account && result.id !== undefined) { state.accountIds.push(result.id); await persistAccountSelection(); }
           closeModal(); await loadAccounts(); markDirty(); toast('账号已保存');
         });
       } catch (error) { modalError(safeError(error)); }
@@ -440,8 +510,9 @@
   }
   function applyDraft(draft) {
     const c = draft.config || {};
-    state.draftId = draft.id; state.attachment = c._ui?.attachment || (c.attachment_id ? {attachment_id:c.attachment_id,filename:c.attachment_name || '草稿附件'} : null);
-    state.accountIds = (c.account_ids || []).filter(id => state.accounts.some(a => a.id === id));
+    state.draftId = draft.id; state.attachment = c._ui?.attachment || (c.attachment_id ? {attachment_id:c.attachment_id,filename:c.attachment_filename || c.attachment_name || '草稿附件'} : null);
+    state.selectionLoaded = true; state.selectionVersion++;
+    state.accountIds = state.accounts.filter(a => (c.account_ids || []).map(String).includes(String(a.id))).map(a => a.id);
     state.import = c._ui?.import || (c.import_id ? {import_id:c.import_id,filename:'草稿名单',sheets:[c.sheet],default_sheet:c.sheet,columns:[c.name_column,c.email_column].filter(Boolean)} : null);
     state.filters = (c.filters || []).map(f => ({column:f.column,values:[...f.values]}));
     state.offset = 0; state.revision = null; state.preview = null; state.generation++; state.preflightSequence++;
@@ -449,11 +520,12 @@
     $('import-name').textContent = state.import?.filename || '尚未导入名单';
     fillSelect($('sheet'),sheetNames(state.import?.sheets),c.sheet);
     setColumns(state.import?.columns || [],{name:c.name_column,email:c.email_column});
-    $('task-title').value = c.title || draft.title || ''; $('subject').value = c.subject || '';
-    quill.clipboard.dangerouslyPasteHTML(c.html_content || '', 'silent');
+    $('task-title').value = c.title || draft.title || ''; $('subject').value = legacyVariables(c.subject,c.name_column);
+    loadMail(legacyVariables(c.html_content,c.name_column));
     $('start-time').value = c.start_time || '08:00'; $('end-time').value = c.end_time || '21:40';
-    $('purpose').value = c.purpose || 'notification'; $('source-note').value = c.source_note || '';
-    $('unsubscribe').checked = c.add_unsubscribe !== false;
+    $('commercial').checked = c.purpose === 'promotion'; state.sourceNote = c.source_note || '';
+    $('unsubscribe').checked = c.purpose === 'promotion' || c.add_unsubscribe !== false;
+    $('unsubscribe').disabled = $('commercial').checked;
     $('send-consent').checked = false; state.dirty = false; state.mailRevision++;
     $('draft-state').textContent = '草稿已载入'; $('selection-summary').textContent = state.import ? '草稿名单需重新预检' : '尚未导入名单';
     renderAccounts(); renderFilters(); renderAttachment(); renderReview(); renderContentIssues();
@@ -468,13 +540,14 @@
       const b = e.target.closest('[data-template]'); if (!b) return;
       if (config().html_content && !window.confirm('使用模板会替换当前邮件内容，继续吗？')) return;
       const t = templates.find(x => String(x.id) === b.dataset.template);
-      $('subject').value = t.subject || ''; quill.clipboard.dangerouslyPasteHTML(t.html_content || '', 'silent');
+      $('subject').value = legacyVariables(t.subject,$('name-column').value); loadMail(legacyVariables(t.html_content,$('name-column').value));
       markDirty(); closeModal();
     };
   }
   function renderAttachment() {
-    $('attachment-label').textContent = state.attachment ? state.attachment.filename + ' · ' + formatSize(state.attachment.size) : '未添加附件';
-    $('attachment-remove').hidden = !state.attachment;
+    $('attachment-label').textContent = state.attachment ? state.attachment.filename + (state.attachment.size === undefined ? '' : ' · ' + formatSize(state.attachment.size)) : '';
+    $('attachment-label').title = $('attachment-label').textContent;
+    $('attachment-chip').hidden = !state.attachment;
     renderPreparation();
   }
   function formatSize(bytes) {
@@ -484,13 +557,13 @@
   }
   async function uploadAttachment(file) {
     if (!file) return;
-    if (!/\.pdf$/i.test(file.name)) throw new Error('当前版本仅支持 PDF 公共附件。');
-    if (file.size > 20 * 1024 * 1024) throw new Error('公共附件最大 20 MiB。');
+    if (!/\.(pdf|docx|xlsx|pptx)$/i.test(file.name)) throw new Error('附件支持 PDF、DOCX、XLSX 或 PPTX。');
+    if (file.size > 20 * 1024 * 1024) throw new Error('附件最大 20 MiB。');
     const form = new FormData(); form.append('file',file);
     await busy($('attachment-upload'),async () => {
       const data = await api('/attachments',{method:'POST',body:form});
       if (!data.attachment_id) throw new Error('附件响应缺少 attachment_id。');
-      state.attachment = data; renderAttachment(); markDirty(); toast('公共附件已上传');
+      state.attachment = {...data,filename:data.filename || file.name,size:data.size ?? file.size}; renderAttachment(); markDirty(); toast('附件已上传');
     });
     $('attachment-file').value = '';
   }
@@ -689,7 +762,7 @@
     $('monitor-content').innerHTML = '<div class="preparation"><h3>准备摘要</h3><dl>' +
       '<div><dt>' + icon('users') + '可发送人数</dt><dd>' + esc(recipientText) + '</dd></div>' +
       '<div><dt>' + icon('at-sign') + '发件账号</dt><dd>' + esc(accountText) + '</dd></div>' +
-      '<div><dt>' + icon('paperclip') + '公共附件</dt><dd>' + esc(state.attachment?.filename || '无附件') + '</dd></div>' +
+      '<div><dt>' + icon('paperclip') + '附件</dt><dd>' + esc(state.attachment?.filename || '无附件') + '</dd></div>' +
       '<div><dt>' + icon('send-horizontal') + '测试结果</dt><dd class="' + testTone + '">' + esc(testText) + '</dd></div>' +
       '</dl></div>';
     icons();
@@ -848,14 +921,16 @@
       '每个筛选列可勾选多个值：同列值采用 OR，不同列条件采用 AND。未勾选值的条件不限制范围。「按分工筛选」会寻找分工、部门、岗位或角色列。',
       '预检显示选中、无效、重复、排除、冲突和可发送计数。问题行开关仅筛选当前页，上一页和下一页可继续核查其他行。修改工作表、映射、筛选或排除名单后必须重新预检。']},
     {id:'mail',title:'正文、变量与附件',paragraphs:[
-      '主题与正文初始为空。可插入 {{列名}} 变量；旧版 <人名> 使用已映射的姓名列。列名须与名单一致，不存在的变量会阻止创建任务。',
+      '主题与正文初始为空，默认思源黑体 14px。可插入 {{列名}} 变量，例如 {{姓名}}。列名须与名单一致，不存在的变量会阻止创建任务。',
       '预览使用名单样例逐条渲染，请检查姓名、空值、主题和附件。邮件正文在隔离窗口中显示；外部图片不会在预览中联网加载，建议上传或粘贴图片。',
-      '公共附件由任务中所有收件人共享，优先使用 PDF。上传成功后核对文件名；移除附件仅移除当前配置关联。',
+      '支持一个 PDF、DOCX、XLSX 或 PPTX 附件，最大 20 MiB。上传成功后核对文件名；移除附件仅移除当前配置关联。',
+      '高级发送选项中的商业推广会将主题标记为 AD，并强制添加退订信息。名单来源备注可选；发送前仍需确认收件人授权。',
       '模板会替换主题与正文，草稿保存四步全部配置，无需先添加账号。打开草稿后需要重新预检并核对授权范围。']},
     {id:'smtp',title:'账号与 SMTP 授权码',paragraphs:[
       'QQ 与 163 预设使用各自 SMTP 主机和 465 SSL / TLS 端口。自定义账号请填写服务商提供的 SMTP 主机、端口与连接安全方式。',
       '授权码不是邮箱登录密码。请在邮箱服务商的账号设置中开启 SMTP，并生成专用授权码。编辑账号时留空保留原授权码；默认记住授权码。',
-      '默认每分钟 6 封、每日 200 封，按账号分别限制。额度、发送窗口和服务商限制会影响任务进度，请参考任务暂停原因。']},
+      '高级参数中的软件预算默认每分钟 6 封、每日 200 封，约 10 秒 / 封，按账号分别限制。这不是服务商额度或避开反垃圾限制的保证。',
+      '账号选择按正式、演示分别保存。首次只有一个已保存授权码的账号时自动选择；取消所有账号后重开仍不选择。草稿使用其自身的账号选择。']},
     {id:'send',title:'测试与正式发送',paragraphs:[
       '正式模式会投递真实邮件；演示模式使用隔离数据和模拟发送。演示横幅始终标识当前模式。切换模式不代表暂停另一模式中已经启动的任务。',
       '先选择测试账号并发送到你有权使用的测试地址，再核对主题、排版和附件。测试 {{列名}} 使用所选名单样例的其他列，姓名使用测试姓名。',
@@ -877,13 +952,50 @@
       '恢复备份可能覆盖当前数据，请先备份，并确保没有运行任务。清理仅针对所选历史日志和未使用的导入文件。不要清理尚需追查的日志。',
       '授权码不写入草稿，也不展示在任务日志；当前备份不含授权码，恢复后需重新填写。备份仍包含名单与发送记录，请妥善保存。']}
   ];
+  const helpNodes = [
+    {id:'list',title:'01 名单',icon:'users',step:1,detail:'导入 XLSX / CSV → 映射姓名和邮箱列 → 筛选 → 预检。检查无效、重复、排除与冲突，确认可发送人数。'},
+    {id:'content',title:'02 邮件',icon:'mail',step:2,detail:'填写主题与正文，插入 {{姓名}} 等名单变量。按需添加附件并逐条预览；邮件包含商业广告时，开启相应选项以标记 AD 并保留退订联系方式。'},
+    {id:'account',title:'03 账号与节奏',icon:'sliders-horizontal',step:3,detail:'选择发件账号，QQ / 163 使用 SMTP 授权码。高级参数可调整软件预算，默认约 10 秒 / 封、每日 200 封；不保证避免服务商限制。'},
+    {id:'confirm',title:'04 核对与启动',icon:'shield-check',step:4,detail:'先测试，再重新预检并确认授权范围。创建待发送任务后，在任务监控中明确启动；冻结任务不随工作台更改。'},
+    {id:'accepted',title:'服务器已接收',icon:'circle-check',tone:'good',detail:'SMTP 服务端已接收，不代表最终送达收件箱。可查看任务明细并导出记录，勿按此计数宣称送达率。'},
+    {id:'failed',title:'发送失败',icon:'circle-x',tone:'bad',detail:'明确发送失败。检查授权码、主机、端口、连接安全方式和日志；修复后仅勾选需要重发的失败记录，确认后重发。'},
+    {id:'uncertain',title:'待确认',icon:'circle-help',tone:'warn',detail:'投递结果未知，不能算成功。先人工检查发件箱及日志，再单独选择待确认记录；确认重复投递风险后才能重发。'}
+  ];
+  let pinnedHelp = null;
+  function closeHelpDetail() {
+    pinnedHelp = null; $('help-node-detail').hidden = true;
+    $('help-flow').querySelectorAll('[data-help-node]').forEach(b => { b.classList.remove('active'); b.setAttribute('aria-expanded','false'); });
+  }
+  function showHelpDetail(node) {
+    $('help-node-detail').hidden = false;
+    $('help-node-detail').innerHTML = '<div class="section-head compact"><h3>' + esc(node.title) + '</h3><button id="help-detail-close" class="icon" title="关闭详情" aria-label="关闭详情">' + icon('x') + '</button></div><p>' + esc(node.detail) + '</p><button id="help-go">' + icon(node.step ? 'arrow-right' : 'list-checks') + (node.step ? '前往' + ['名单','邮件','账号与节奏','核对发送'][node.step - 1] : '查看任务记录') + '</button>';
+    $('help-flow').querySelectorAll('[data-help-node]').forEach(b => { const active = b.dataset.helpNode === node.id; b.classList.toggle('active',active); b.setAttribute('aria-expanded',String(active)); });
+    $('help-detail-close').onclick = () => { closeHelpDetail(); $('help-flow').querySelector('[data-help-node="' + node.id + '"]').focus(); closeHelpDetail(); };
+    $('help-go').onclick = () => { closeHelpDetail(); navigate(node.step ? 'workspace' : 'history'); if (node.step) setStep(node.step); };
+    icons();
+  }
   function renderHelp() {
     const query = $('help-search').value.trim().toLowerCase();
+    pinnedHelp = null;
+    const summaries = {list:'列映射与名单预检',content:'正文、附件与样例预览',account:'账号复用与发送节奏',confirm:'冻结名单并明确启动',accepted:'已提交，不代表最终送达',failed:'明确拒绝，核对原因再重试',uncertain:'先核对，勿盲目重发'};
+    const nodeHTML = node => '<button data-help-node="' + node.id + '" class="help-node ' + (node.tone || '') + '" aria-expanded="false" aria-controls="help-node-detail"' + (query && !(node.title + node.detail).toLowerCase().includes(query) ? ' hidden' : '') + '>' + icon(node.icon) + '<span class="help-node-copy"><strong>' + esc(node.title) + '</strong><small>' + esc(summaries[node.id] || '') + '</small></span></button>';
+    $('help-flow').innerHTML = '<h2>从名单到发送</h2><div class="help-path">' + helpNodes.slice(0,4).map(nodeHTML).join('') + '</div><h3 class="help-result-title">启动后的三种结果</h3><div class="help-branches">' + helpNodes.slice(4).map(nodeHTML).join('') + '</div><div class="help-detail-slot"><div id="help-node-detail" class="help-node-detail" hidden></div></div>';
+    $('help-flow').querySelectorAll('[data-help-node]').forEach(b => {
+      const node = helpNodes.find(n => n.id === b.dataset.helpNode);
+      b.onmouseenter = () => { if (!pinnedHelp) showHelpDetail(node); };
+      b.onfocus = () => { if (!pinnedHelp) showHelpDetail(node); };
+      b.onclick = () => { if (pinnedHelp === node.id) closeHelpDetail(); else { pinnedHelp = node.id; showHelpDetail(node); } };
+    });
+    $('help-flow').onmouseleave = () => { if (!pinnedHelp && !$('help-flow').contains(document.activeElement)) closeHelpDetail(); };
     const articles = help.filter(a => (a.title + a.paragraphs.join('')).toLowerCase().includes(query));
     $('help-directory').innerHTML = articles.map(a => '<a href="#help-' + a.id + '">' + esc(a.title) + '</a>').join('');
-    $('help-articles').innerHTML = articles.length ? articles.map(a => '<section class="help-article" id="help-' + a.id +
-      '"><h2>' + esc(a.title) + '</h2>' + a.paragraphs.map(p => '<p>' + esc(p) + '</p>').join('') + '</section>').join('') :
+    $('help-articles').innerHTML = articles.length ? articles.map(a => '<details class="help-article" id="help-' + a.id +
+      '"' + (query ? ' open' : '') + '><summary>' + esc(a.title) + '</summary>' + a.paragraphs.map(p => '<p>' + esc(p) + '</p>').join('') + '</details>').join('') :
       '<div class="empty">' + icon('search-x') + '<strong>没有匹配的帮助</strong></div>';
+    $('help-directory').onclick = e => {
+      const link = e.target.closest('a'); if (!link) return;
+      const article = $(link.getAttribute('href').slice(1)); if (article) article.open = true;
+    };
     icons();
   }
   async function loadSettings() {
@@ -941,17 +1053,18 @@
   function resetComposer() {
     clearTimeout(preflightTimer);
     state.import = null; state.columns = []; state.filters = []; state.preview = null; state.revision = null;
-    state.accountIds = []; state.attachment = null; state.draftId = null; state.dirty = false;
+    state.accountIds = []; state.selectionLoaded = false; state.selectionVersion++;
+    state.attachment = null; state.draftId = null; state.dirty = false; state.sourceNote = '';
     state.generation++; state.preflightSequence++; state.mailRevision++; state.offset = 0;
     state.previewIndex = 0; state.selectedRecipients.clear();
     state.testResult = null;
-    ['subject','task-title','source-note','suppressions'].forEach(id => { $(id).value = ''; });
-    $('purpose').value = 'notification'; $('unsubscribe').checked = true; $('send-consent').checked = false;
+    ['subject','task-title','suppressions'].forEach(id => { $(id).value = ''; });
+    $('commercial').checked = false; $('unsubscribe').checked = true; $('unsubscribe').disabled = false; $('send-consent').checked = false;
     $('start-time').value = '08:00'; $('end-time').value = '21:40'; $('problem-only').checked = false;
     $('import-empty').hidden = false; $('import-content').hidden = true;
     $('import-name').textContent = '尚未导入名单'; $('selection-summary').textContent = '尚未导入名单';
     $('draft-state').textContent = '未保存草稿';
-    fillSelect($('sheet'),[]); setColumns([]); quill.setText('','silent');
+    fillSelect($('sheet'),[]); setColumns([]); loadMail('');
     renderAttachment(); renderReview(); renderContentIssues(); setStep(1);
   }
   async function switchMode(mode) {
@@ -987,39 +1100,65 @@
   }
   function initializeEditor() {
     if (!window.Quill || Quill.version !== '1.3.6') throw new Error('本地 Quill 1.3.6 加载失败，请检查 static/vendor。');
-    const Font = Quill.import('attributors/style/font'); Font.whitelist = ['Microsoft YaHei','SimSun','Georgia','monospace']; Quill.register(Font,true);
+    const Font = Quill.import('attributors/style/font'); Font.whitelist = ['Source Han Sans SC','Microsoft YaHei','SimSun','Georgia','monospace']; Quill.register(Font,true);
     const Size = Quill.import('attributors/style/size'); Size.whitelist = ['12px','14px','16px','18px','24px','32px']; Quill.register(Size,true);
     const Parchment = Quill.import('parchment');
     Quill.register(new Parchment.Attributor.Style('lineheight','line-height',{scope:Parchment.Scope.BLOCK,whitelist:['1.25','1.5','1.8','2']}),true);
-    quill = new Quill('#editor',{theme:'snow',placeholder:'',modules:{toolbar:{
-      container:[[{font:[false,...Font.whitelist]}],[{size:[false,...Size.whitelist]}],
-        ['bold','italic','underline','strike'],[{color:[]},{background:[]}],[{header:[1,2,3,false]}],
-        [{list:'ordered'},{list:'bullet'}],[{align:[]}],['link','image','clean']],
+    // Snow replaces every select with its picker. These native controls have custom handlers.
+    const nativeSelects = [...$('editor-toolbar').querySelectorAll('select[data-format]')].map(select => {
+      const marker = document.createComment('native format control');
+      select.replaceWith(marker);
+      return {select,marker};
+    });
+    quill = new Quill('#editor',{theme:'snow',placeholder:'',modules:{history:{userOnly:true},toolbar:{
+      container:'#editor-toolbar',
       handlers:{image:function() {
         const input = document.createElement('input'); input.type = 'file'; input.accept = 'image/*';
         input.onchange = () => {
           const file = input.files[0]; if (!file) return;
           if (!/^image\/(png|jpeg|gif|webp)$/.test(file.type)) { toast('正文图片支持 PNG、JPEG、GIF 和 WebP'); return; }
           if (file.size > 5 * 1024 * 1024) { toast('正文图片请控制在 5 MB 以内'); return; }
-          const reader = new FileReader(); const index = quill.getSelection(true)?.index ?? quill.getLength() - 1;
-          reader.onload = () => quill.insertEmbed(index,'image',reader.result,'user');
+          const reader = new FileReader(); const range = {...editorRange};
+          reader.onload = () => {
+            quill.setSelection(range,'silent');
+            quill.insertEmbed(range.index,'image',reader.result,'user'); quill.setSelection(range.index + 1,0);
+          };
           reader.onerror = () => toast('图片读取失败'); reader.readAsDataURL(file);
         }; input.click();
       }}
     }}});
-    const toolbar = document.querySelector('.ql-toolbar');
-    const spacing = document.createElement('select'); spacing.setAttribute('aria-label','行距'); spacing.title = '行距';
-    spacing.className = 'lineheight-select';
-    spacing.innerHTML = '<option value="1.25">行距 1.25</option><option value="1.5">行距 1.5</option><option value="1.8" selected>行距 1.8</option><option value="2">行距 2</option>';
-    spacing.onchange = () => quill.format('lineheight',spacing.value,'user'); toolbar.append(spacing);
-    const titles = {bold:'加粗',italic:'斜体',underline:'下划线',strike:'删除线',link:'链接',image:'插入图片',clean:'清除格式',list:'列表',align:'对齐',font:'字体',size:'字号',header:'标题',color:'文字颜色',background:'背景颜色'};
-    toolbar.querySelectorAll('button,select').forEach(el => {
-      const cls = [...el.classList].find(c => c.startsWith('ql-')); const label = titles[cls?.slice(3)];
-      if (label) { el.title = label; el.setAttribute('aria-label',label); }
+    nativeSelects.forEach(({select,marker}) => marker.replaceWith(select));
+    const toolbar = $('editor-toolbar');
+    const toolIcons = {bold:'bold',italic:'italic',underline:'underline',strike:'strikethrough',link:'link',image:'image',clean:'remove-formatting'};
+    toolbar.querySelectorAll('.editor-format-row button').forEach(el => {
+      const name = [...el.classList].find(c => c.startsWith('ql-'))?.slice(3);
+      const glyph = name === 'list' ? (el.value === 'ordered' ? 'list-ordered' : 'list') :
+        name === 'indent' ? (el.value === '-1' ? 'indent-decrease' : 'indent-increase') : toolIcons[name];
+      if (glyph) el.innerHTML = icon(glyph);
     });
+    toolbar.addEventListener('mousedown',e => { if (e.target.closest('button')) e.preventDefault(); });
+    toolbar.querySelectorAll('[data-format]').forEach(el => el.addEventListener('change',() => {
+      const range = {...editorRange}; quill.setSelection(range,'silent');
+      quill.format(el.dataset.format,el.value || false,'user');
+      quill.setSelection(range,'silent'); updateEditorTools();
+    }));
+    const historyAction = action => {
+      const range = {...editorRange};
+      quill.history[action]();
+      const index = Math.min(range.index, quill.getLength() - 1);
+      editorRange = {index,length:Math.min(range.length, quill.getLength() - 1 - index)};
+      quill.setSelection(editorRange,'silent');
+      updateEditorTools();
+    };
+    $('editor-undo').onclick = () => historyAction('undo');
+    $('editor-redo').onclick = () => historyAction('redo');
+    quill.on('selection-change',range => { if (range) { editorRange = {...range}; updateEditorTools(); } });
     quill.root.setAttribute('aria-label','邮件正文'); quill.root.setAttribute('role','textbox');
     quill.root.setAttribute('aria-multiline','true');
-    quill.on('text-change',(_delta,_old,source) => { if (source !== 'silent') markDirty(); });
+    quill.on('text-change',(_delta,_old,source) => {
+      if (source !== 'silent') markDirty();
+      queueMicrotask(updateEditorTools);
+    });
     quill.root.addEventListener('paste',e => {
       const images = [...(e.clipboardData?.items || [])].filter(item => item.type.startsWith('image/'));
       if (!images.length) return; e.preventDefault();
@@ -1032,6 +1171,31 @@
         reader.readAsDataURL(file);
       });
     });
+    loadMail(''); icons();
+  }
+  function updateEditorTools() {
+    if (!quill) return;
+    const range = {index:Math.min(editorRange.index,quill.getLength() - 1),length:editorRange.length};
+    const format = quill.getFormat(range);
+    $('editor-toolbar').querySelectorAll('[data-format]').forEach(el => {
+      const key = el.dataset.format, value = format[key];
+      if (el.type === 'color') {
+        const fallback = key === 'color' ? '#202429' : '#ffffff';
+        const rgb = typeof value === 'string' && value.match(/^rgb\((\d+),\s*(\d+),\s*(\d+)\)$/);
+        el.value = rgb ? '#' + rgb.slice(1).map(n => Number(n).toString(16).padStart(2,'0')).join('') : /^#[0-9a-f]{6}$/i.test(value) ? value : fallback;
+        el.parentElement.classList.toggle('active',!!value);
+      } else el.value = Array.isArray(value) ? '' : value || state.mailDefaults[key] || '';
+    });
+    $('editor-toolbar').querySelectorAll('.editor-format-row button').forEach(el => {
+      const key = [...el.classList].find(c => c.startsWith('ql-'))?.slice(3);
+      const active = key === 'list' ? format.list === el.value : !!format[key] && !Array.isArray(format[key]);
+      if (!['indent','clean','image'].includes(key)) {
+        el.classList.toggle('ql-active',active); el.setAttribute('aria-pressed',String(active));
+      }
+      if (key === 'indent') el.disabled = el.value === '-1' ? !format.indent : Number(format.indent || 0) >= 8;
+    });
+    $('editor-undo').disabled = quill.history.stack.undo.length === 0;
+    $('editor-redo').disabled = quill.history.stack.redo.length === 0;
   }
   function bindEvents() {
     document.querySelectorAll('[data-view]').forEach(b => b.onclick = () => navigate(b.dataset.view));
@@ -1059,6 +1223,7 @@
       }
     });
     document.addEventListener('keydown',e => {
+      if (e.key === 'Escape' && state.view === 'help') closeHelpDetail();
       if (e.key === 'Escape' && !$('settings').hidden) setDrawer(false);
       if (e.key === 'Escape' && document.body.classList.contains('focus-edit')) document.body.classList.remove('focus-edit');
       if (e.key === 'Tab' && !$('settings').hidden) {
@@ -1079,8 +1244,9 @@
     on('demo-load','click',e => busy(e.currentTarget,async () => {
       if (state.mode !== 'demo') return;
       if (state.import && !window.confirm('演示名单将替换当前名单，继续吗？')) return;
-      const data = await api('/demo/import'); setImport(data); await loadAccounts();
-      state.accountIds = state.accounts.map(a => a.id); renderAccounts(); await runPreflight(); toast('虚构演示名单已载入');
+      const data = await api('/demo/import'); setImport(data);
+      state.selectionLoaded = false; await loadAccounts();
+      renderAccounts(); await runPreflight(); toast('虚构演示名单已载入');
     }));
     on('sheet','change',async () => {
       const oldName = $('name-column').value, oldEmail = $('email-column').value;
@@ -1139,10 +1305,14 @@
     on('import-prev','click',async () => { state.offset = Math.max(0,state.offset - state.limit); await runPreflight(); });
     on('import-next','click',async () => { state.offset += state.limit; await runPreflight(); });
     on('import-page-size','change',async e => { state.limit = Number(e.target.value); state.offset = 0; await runPreflight(); });
-    ['subject','task-title','source-note','start-time','end-time'].forEach(id => on(id,'input',() => markDirty()));
-    ['purpose','unsubscribe'].forEach(id => on(id,'change',() => markDirty()));
+    ['subject','task-title','start-time','end-time'].forEach(id => on(id,'input',() => markDirty()));
+    on('unsubscribe','change',() => markDirty());
+    on('commercial','change',() => {
+      $('unsubscribe').disabled = $('commercial').checked;
+      if ($('commercial').checked) $('unsubscribe').checked = true;
+      markDirty();
+    });
     on('variable-insert','click',() => { const col = $('variable-column').value; if (!col) throw new Error('请选择要插入的名单列。'); insertVariable('{{' + col + '}}'); });
-    on('legacy-name','click',() => insertVariable('<人名>'));
     on('focus-editor','click',() => {
       document.body.classList.toggle('focus-edit');
       $('focus-editor').title = document.body.classList.contains('focus-edit') ? '退出专注编辑' : '专注编辑';
@@ -1156,7 +1326,7 @@
       if (!e.target.matches('[data-account-select]')) return;
       const a = state.accounts.find(a => String(a.id) === e.target.dataset.accountSelect);
       state.accountIds = e.target.checked ? [...new Set([...state.accountIds,a.id])] : state.accountIds.filter(id => id !== a.id);
-      markDirty();
+      persistAccountSelection(); markDirty();
     });
     on('accounts','click',async e => {
       const edit = e.target.closest('[data-account-edit]'), remove = e.target.closest('[data-account-delete]');
@@ -1164,11 +1334,12 @@
       if (remove) {
         const a = state.accounts.find(a => String(a.id) === remove.dataset.accountDelete);
         if (!await confirmAction('删除发件账号','删除 ' + a.email + '？已保存任务可能引用此账号，请先核查。','删除')) return;
-        await api('/accounts/' + pathId(a.id),{method:'DELETE'}); await loadAccounts(); markDirty(); toast('账号已删除');
+        await api('/accounts/' + pathId(a.id),{method:'DELETE'}); await loadAccounts(); await persistAccountSelection(); markDirty(); toast('账号已删除');
       }
     });
     on('draft-save','click',() => saveDraft()); on('draft-open','click',openDrafts); on('template-open','click',openTemplates);
     on('preview-open','click',e => busy(e.currentTarget,openPreview)); on('test-open','click',openTest);
+    on('editor-preview','click',e => busy(e.currentTarget,openPreview));
     on('task-create','click',createTask); on('monitor-refresh','click',e => busy(e.currentTarget,refreshTask));
     on('history-refresh','click',e => busy(e.currentTarget,async () => { await loadTasks(); if (state.task) await refreshTask(); }));
     on('monitor-content','click',handleTaskClick); on('task-detail','click',handleTaskClick);
@@ -1179,9 +1350,12 @@
     });
     on('task-list','click',async e => {
       const b = e.target.closest('[data-task-id]'); if (!b) return;
-      await selectTask(b.dataset.taskId); $('task-detail').scrollIntoView({behavior:'smooth',block:'start'});
+      await selectTask(b.dataset.taskId); $('task-detail').scrollIntoView({behavior:matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',block:'start'});
     });
     on('task-search','input',renderTaskList); on('task-status','change',renderTaskList); on('help-search','input',renderHelp);
+    on('help-flow','focusout',e => {
+      if (!pinnedHelp && !$('help-flow').contains(e.relatedTarget)) closeHelpDetail();
+    });
     on('data-folder','click',() => nativeCall('open_data_folder'));
     on('data-backup','click',e => busy(e.currentTarget,async () => downloadExport(await api('/data/backup',{method:'POST'}))));
     on('data-restore','click',() => $('restore-file').click()); on('restore-file','change',e => restoreFile(e.target.files[0]));

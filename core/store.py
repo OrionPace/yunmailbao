@@ -61,6 +61,7 @@ class Store:
                 CREATE TABLE IF NOT EXISTS drafts (
                     id TEXT PRIMARY KEY, title TEXT NOT NULL, config TEXT NOT NULL, updated_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS preferences (key TEXT PRIMARY KEY, payload TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS logs (
                     id INTEGER PRIMARY KEY, task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
                     time TEXT NOT NULL, message TEXT NOT NULL

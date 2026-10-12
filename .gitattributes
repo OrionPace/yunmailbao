@@ -2,3 +2,4 @@
 LICENSE -text
 packaging/licenses/** -text
 static/vendor/** -text
+static/fonts/** -text

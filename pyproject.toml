@@ -1,6 +1,6 @@
 [project]
 name = "auto-email"
-version = "0.2.0"
+version = "0.3.0"
 description = "Local-first desktop mailing workbench with verified lists and recoverable tasks"
 readme = "README.md"
 requires-python = ">=3.12"

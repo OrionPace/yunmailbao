@@ -19,7 +19,9 @@
 AppId={#InstallerAppId}
 AppName={#AppName}
 AppVersion={#AppVersion}
-AppPublisher=YunYouBao contributors
+AppPublisher=YunMailBao contributors
+AppPublisherURL=https://github.com/OrionPace/yunmailbao
+AppSupportURL=https://github.com/OrionPace/yunmailbao/issues
 AppCopyright=Copyright (C) 2026 YunYouBao contributors
 VersionInfoVersion={#AppVersion}.0
 DefaultDirName={localappdata}\Programs\YunYouBao

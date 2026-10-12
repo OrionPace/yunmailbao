@@ -62,6 +62,8 @@ jobs:
             if (-not $ready) { throw 'Demonstration server did not start' }
             npm --prefix tests/browser test
             if ($LASTEXITCODE -ne 0) { throw 'Browser workflow failed' }
+            node tests/browser/product-ui.cjs
+            if ($LASTEXITCODE -ne 0) { throw 'Product UI acceptance failed' }
           } finally {
             Stop-Process -Id $preview.Id -ErrorAction SilentlyContinue
           }
@@ -78,12 +80,12 @@ jobs:
               if (Test-Path "$base/$name") { throw "Personal runtime in artifact: $name" }
             }
           }
-          foreach ($asset in @('LICENSE', 'THIRD_PARTY_NOTICES.md', 'static/script.js', 'assets/branding/yunyoubao-fox-v1.ico')) {
+          foreach ($asset in @('LICENSE', 'THIRD_PARTY_NOTICES.md', 'static/script.js', 'static/fonts/SourceHanSansCN-VF.ttf.woff2', 'static/fonts/SourceHanSans-LICENSE.txt', 'assets/branding/yunyoubao-fox-v1.ico')) {
             if (-not (Test-Path "$candidate/_internal/$asset")) { throw "Missing asset: $asset" }
           }
       - uses: actions/upload-artifact@v4
         with:
-          name: YunYouBao-${{ steps.version.outputs.version }}-windows-x64-onedir
+          name: YunMailBao-${{ steps.version.outputs.version }}-windows-x64-onedir
           path: .build/candidate/YunYouBao/
           if-no-files-found: error
           include-hidden-files: true

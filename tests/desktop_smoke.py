@@ -25,7 +25,7 @@ def run():
         stack.enter_context(patch.dict(os.environ, {"YUNYOUBAO_DATA_DIR": temporary}))
         for target in ("smtplib.SMTP", "smtplib.SMTP_SSL"):
             stack.enter_context(patch(target, side_effect=AssertionError("Real SMTP forbidden")))
-        from main import BASE_DIR, DesktopBridge, create_app
+        from main import BASE_DIR, VERSION, DesktopBridge, create_app
 
         app = create_app(temporary, initial_mode="demo", desktop=True)
         listener = socket.socket()
@@ -56,7 +56,7 @@ def run():
                     time.sleep(0.1)
                 assert ready, "Editor or native bridge not ready"
                 report.update(window.evaluate_js("({version:window.YUNYOUBAO.version, editor_count:document.querySelectorAll('.ql-editor').length, logo_width:document.querySelector('.brand img').naturalWidth, bridge_functions:Object.keys(window.pywebview.api).sort()})"))
-                assert report["version"] == "0.2.0"
+                assert report["version"] == VERSION
                 assert report["editor_count"] == 1
                 assert report["logo_width"] > 0
                 assert report["bridge_functions"] == ["import_legacy", "open_data_folder", "save_export"]

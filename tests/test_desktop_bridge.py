@@ -1,6 +1,8 @@
 import ctypes
 import io
 import os
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -61,6 +63,33 @@ class DesktopBridgeTests(unittest.TestCase):
         encrypted = protect(value)
         self.assertNotIn(value, encrypted)
         self.assertEqual(unprotect(encrypted), value)
+
+    @unittest.skipUnless(os.name == "nt", "Windows DPAPI across processes")
+    def test_saved_account_and_selection_survive_process_restart(self):
+        script = """
+import sys
+from unittest.mock import patch
+from core.service import ProductService
+with patch('smtplib.SMTP', side_effect=AssertionError('Real SMTP forbidden')), \\
+     patch('smtplib.SMTP_SSL', side_effect=AssertionError('Real SMTP forbidden')):
+    service = ProductService(sys.argv[1])
+    if sys.argv[2] == 'save':
+        account = service.save_account({'id':'restart-fixture', 'email':'restart@example.test',
+            'name':'Restart fixture', 'smtp_host':'smtp.example.test', 'smtp_port':465,
+            'security':'ssl', 'password':'FAKE-RESTART-SECRET', 'remember':True})
+        service.save_account_selection([account['id']])
+    else:
+        assert service.account_selection() == ['restart-fixture']
+        assert service.sender('restart-fixture')['password'] == 'FAKE-RESTART-SECRET'
+        assert service.accounts()[0]['has_secret'] is True
+        assert 'password' not in service.accounts()[0]
+    service.engine.shutdown()
+"""
+        root = self.root / "restart"
+        for operation in ("save", "read"):
+            subprocess.run([sys.executable, "-B", "-c", script, str(root), operation],
+                           cwd=Path(__file__).resolve().parents[1], check=True,
+                           capture_output=True, text=True, timeout=30)
 
     @unittest.skipUnless(os.name == "nt", "Windows mutex")
     def test_second_instance_is_rejected_before_opening_data(self):

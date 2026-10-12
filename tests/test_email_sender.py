@@ -462,6 +462,35 @@ class MimeTests(EmailTestCase):
         self.assertEqual(result.status, "failed")
         self.ssl_factory.assert_not_called()
 
+    def test_attachment_original_filename_and_exact_mime_types(self):
+        cases = (("pdf", "application/pdf"),
+                 ("docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
+                 ("xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
+                 ("pptx", "application/vnd.openxmlformats-officedocument.presentationml.presentation"))
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "uuid.pdf"
+            path.write_bytes(b"attachment fixture")
+            for extension, mime_type in cases:
+                filename = "\u57f9\u8bad\u8d44\u6599." + extension
+                with self.subTest(extension=extension):
+                    msg = self.message(attachment_path=path, attachment_filename=filename)
+                    attachment = list(msg.iter_attachments())[0]
+                    self.assertEqual(attachment.get_filename(), filename)
+                    self.assertEqual(attachment.get_content_type(), mime_type)
+                    self.assertEqual(attachment.get_payload(decode=True), b"attachment fixture")
+                    self.assertEqual(self.send(attachment_path=path, attachment_filename=filename).status, "accepted")
+                    sent = BytesParser(policy=policy.default).parsebytes(self.server.sendmail.call_args.args[2])
+                    self.assertEqual(list(sent.iter_attachments())[0].get_filename(), filename)
+
+    def test_original_filename_rejects_header_injection_and_paths_before_smtp(self):
+        with patch("builtins.open", mock_open(read_data=b"fixture")):
+            for filename in ("bad\r\nBcc: victim@example.com.pdf", "bad\x00.pdf", "../bad.pdf", "dir\\bad.pdf", ""):
+                with self.subTest(filename=filename):
+                    with self.assertRaises(ValueError):
+                        self.message(attachment_path="uuid.pdf", attachment_filename=filename)
+                    self.assertEqual(self.send(attachment_path="uuid.pdf", attachment_filename=filename).status, "failed")
+        self.ssl_factory.assert_not_called()
+
     def test_total_html_limit_is_checked(self):
         with patch("core.email_sender.MAX_MESSAGE_BYTES", 10), self.assertRaises(ValueError):
             render_email("Subject", "x" * 11, self.recipient, self.sender, False)

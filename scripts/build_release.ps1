@@ -89,7 +89,7 @@ function Get-CandidateInventory {
             if (Test-Path -LiteralPath (Join-Path $base $name)) { throw "Personal runtime directory is forbidden: $name" }
         }
     }
-    foreach ($asset in @('LICENSE', 'THIRD_PARTY_NOTICES.md', 'static\script.js', 'assets\branding\yunyoubao-fox-v1.ico')) {
+    foreach ($asset in @('LICENSE', 'THIRD_PARTY_NOTICES.md', 'static\script.js', 'static\fonts\SourceHanSansCN-VF.ttf.woff2', 'static\fonts\SourceHanSans-LICENSE.txt', 'assets\branding\yunyoubao-fox-v1.ico')) {
         if (-not (Test-Path -LiteralPath (Join-Path $CandidateDir "_internal\$asset") -PathType Leaf)) {
             throw "Required candidate asset missing: $asset"
         }
@@ -194,7 +194,7 @@ try {
     $hash = Get-Sha256 $installer
     $manifest = [ordered]@{
         schema_version = 1
-        product = 'YunYouBao'
+        product = 'YunMailBao'
         app_version = $AppVersion
         packaged_at_utc = [DateTime]::UtcNow.ToString('o')
         source = $provenance.source

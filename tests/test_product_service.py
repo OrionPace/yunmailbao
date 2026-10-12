@@ -6,6 +6,8 @@ import io
 import json
 import os
 import sqlite3
+import subprocess
+import sys
 import tempfile
 import threading
 import unittest
@@ -17,7 +19,7 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 from openpyxl import Workbook
 
-from core.email_sender import SendResult, render_email
+from core.email_sender import EmailSenderCore, SendResult, render_email
 from core.service import ProductService
 
 
@@ -49,6 +51,28 @@ def csv_bytes(rows):
     writer.writeheader()
     writer.writerows(rows)
     return stream.getvalue().encode("utf-8-sig")
+
+
+def office_bytes(extension, extra=None):
+    main, category, namespace, root = {
+        "docx": ("word/document.xml", "wordprocessingml.document", "wordprocessingml", "document"),
+        "xlsx": ("xl/workbook.xml", "spreadsheetml.sheet", "spreadsheetml", "workbook"),
+        "pptx": ("ppt/presentation.xml", "presentationml.presentation", "presentationml", "presentation"),
+    }[extension]
+    entries = {
+        "[Content_Types].xml": '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+            f'<Override PartName="/{main}" ContentType="application/vnd.openxmlformats-officedocument.{category}.main+xml"/></Types>',
+        "_rels/.rels": '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+            f'<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="{main}"/></Relationships>',
+        main: f'<{root} xmlns="http://schemas.openxmlformats.org/{namespace}/2006/main"/>',
+    }
+    entries.update(extra or {})
+    stream = io.BytesIO()
+    with zipfile.ZipFile(stream, "w", zipfile.ZIP_DEFLATED) as archive:
+        for name, content in entries.items():
+            if content is not None:
+                archive.writestr(name, content)
+    return stream.getvalue()
 
 
 class ProductServiceIntegrationTests(unittest.TestCase):
@@ -238,16 +262,297 @@ class ProductServiceIntegrationTests(unittest.TestCase):
                 config.update(subject=subject, purpose="promotion", account_id=self.account["id"])
                 preview = self.service.preview_email(config)
                 self.assertEqual(preview["subject"], rendered_subject)
-                with self.assertRaises(ValueError):
-                    self.service.create_task(config)
-                config["source_note"] = "Explicit opt-in webinar registration fixture"
                 task = self.service.create_task(config)
                 frozen = task["config"]
+                self.assertEqual(frozen["source_note"], "")
                 self.assertEqual(frozen["subject"], frozen_subject)
                 rendered = render_email(frozen["subject"], frozen["html_content"], preview["recipient"],
                                         self.account, frozen["add_unsubscribe"])
                 for field in ("subject", "html_content", "text_content"):
                     self.assertEqual(rendered[field], preview[field])
+
+    def test_new_provider_defaults_and_explicit_old_account_security(self):
+        for domain in ("qq.com", "163.com"):
+            with self.subTest(domain=domain):
+                account = self.service.save_account({"email": "new@" + domain})
+                self.assertEqual((account["smtp_host"], account["security"], account["smtp_port"]),
+                                 ("smtp." + domain, "ssl", 465))
+        old = self.service.save_account({"email": "old@qq.com", "security": "starttls", "smtp_port": 587})
+        reopened = self.make_service("service")
+        self.assertEqual((reopened.sender(old["id"])["security"], reopened.sender(old["id"])["smtp_port"]), ("starttls", 587))
+
+    def test_promotion_forces_unsubscribe_for_preview_test_and_task(self):
+        config = self.config([recipient("offer@example.com")])
+        config.update(purpose="promotion", add_unsubscribe=False, account_id=self.account["id"], test_email="test@example.com", values={"Name": "Reader"})
+        preview = self.service.preview_email(config)
+        self.assertIn("mailto:", preview["html_content"])
+        task = self.service.create_task(config)
+        self.assertTrue(task["config"]["add_unsubscribe"])
+        self.assertTrue(task["config"]["subject"].startswith("AD "))
+        self.service.engine.test_send(config)
+        self.assertTrue(self.transport.calls[-1]["add_unsubscribe"])
+        self.assertTrue(self.transport.calls[-1]["subject"].startswith("AD "))
+        self.service.engine.start(task["id"])
+        self.assertEqual(self.wait_for_task(self.service, task["id"])["counts"]["accepted"], 1)
+        self.assertTrue(self.transport.calls[-1]["add_unsubscribe"])
+        config.update(purpose="notification", source_note="Historical source", add_unsubscribe=False)
+        notification = self.service.create_task(config)
+        self.assertFalse(notification["config"]["add_unsubscribe"])
+        self.assertEqual(notification["config"]["source_note"], "Historical source")
+
+    def test_original_attachment_name_reaches_prevalidation_test_and_frozen_send(self):
+        for extension in ("pdf", "docx", "xlsx", "pptx"):
+            with self.subTest(extension=extension):
+                filename = "\u57f9\u8bad\u8d44\u6599." + extension
+                content = b"%PDF-fixture" if extension == "pdf" else office_bytes(extension)
+                item = self.service.add_file(filename, content, "attachment")
+                config = self.config([recipient("files@example.com")])
+                config.update(attachment_id=item["id"], account_id=self.account["id"], test_email="test@example.com", values={"Name": "Reader"})
+                real_create = EmailSenderCore.create_email_msg
+                with patch.object(EmailSenderCore, "create_email_msg", autospec=True, side_effect=real_create) as create:
+                    task = self.service.create_task(config)
+                    self.assertEqual(create.call_args.kwargs["attachment_filename"], filename)
+                    self.service.engine.test_send(config)
+                    self.assertEqual(create.call_args.kwargs["attachment_filename"], filename)
+                self.assertEqual(task["config"]["attachment_name"], filename)
+                self.assertEqual(self.transport.calls[-1]["attachment_filename"], filename)
+                self.service.engine.start(task["id"])
+                self.assertEqual(self.wait_for_task(self.service, task["id"])["counts"]["accepted"], 1)
+                self.assertEqual(self.transport.calls[-1]["attachment_filename"], filename)
+                self.assertEqual(self.service.preview_email(config)["attachment_name"], filename)
+
+    def test_attachment_upload_rejects_invalid_macro_and_mismatched_office(self):
+        cases = [("bad.pdf", b"not a PDF"), ("bad.docx", b"not ZIP"),
+                 ("bad.xlsx", office_bytes("docx")), ("macro.docm", office_bytes("docx")),
+                 ("macro.xlsm", office_bytes("xlsx")), ("macro.pptm", office_bytes("pptx"))]
+        for extension, main in (("docx", "word/document.xml"), ("xlsx", "xl/workbook.xml"), ("pptx", "ppt/presentation.xml")):
+            for extra in ({"[Content_Types].xml": None}, {"_rels/.rels": None}, {main: None},
+                          {main: "<broken>"}, {main: '<!DOCTYPE document [<!ENTITY x "expand">]><document>&x;</document>'},
+                          {"any/VBAPROJECT.BIN": b"macro"},
+                          {"[Content_Types].xml": '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="bin" ContentType="application/vnd.ms-office.vbaProject"/></Types>'}):
+                cases.append(("bad." + extension, office_bytes(extension, extra)))
+        before = self.service.store.all("SELECT * FROM files")
+        for filename, content in cases:
+            with self.subTest(filename=filename, size=len(content)), self.assertRaises(ValueError):
+                self.service.add_file(filename, content, "attachment")
+        self.assertEqual(self.service.store.all("SELECT * FROM files"), before)
+        self.assertEqual(self.transport.calls, [])
+
+    def test_upload_and_office_expansion_limits(self):
+        self.assertEqual(self.service.add_file("limit.pdf", b"%PDF-" + b"a" * (20 * 1024 * 1024 - 5), "attachment")["size"], 20 * 1024 * 1024)
+        with self.assertRaises(ValueError):
+            self.service.add_file("over.pdf", b"%PDF-" + b"a" * (20 * 1024 * 1024 - 4), "attachment")
+        content = office_bytes("docx", {"word/large.bin": b"a" * 10000})
+        with patch("core.service.MAX_EXPANDED", 9000), self.assertRaises(ValueError):
+            self.service.add_file("bomb.docx", content, "attachment")
+
+    def test_serialized_limit_is_prechecked_before_test_quota_or_task_creation(self):
+        attachment = self.service.add_file("original.pdf", b"%PDF-" + b"a" * 2000, "attachment")
+        config = self.config([recipient("size@example.com")])
+        config.update(attachment_id=attachment["id"], account_id=self.account["id"], test_email="test@example.com", values={"Name": "Reader"})
+        with patch("core.email_sender.MAX_MESSAGE_BYTES", 3000):
+            with self.assertRaises(ValueError):
+                self.service.create_task(config)
+            with self.assertRaises(ValueError):
+                self.service.engine.test_send(config)
+        self.assertEqual(self.service.tasks(), [])
+        self.assertEqual(self.service.engine.quota(self.account)["count"], 0)
+        self.assertEqual(self.transport.calls, [])
+
+    def test_account_selection_distinguishes_unconfigured_empty_and_persists_ids(self):
+        self.assertIsNone(self.service.account_selection())
+        self.assertEqual(self.service.save_account_selection([]), [])
+        reopened = self.make_service("service")
+        self.assertEqual(reopened.account_selection(), [])
+        self.assertEqual(reopened.save_account_selection([self.account["id"], self.account["id"]]), [self.account["id"]])
+        self.assertEqual(self.service.account_selection(), [self.account["id"]])
+        for invalid in (None, "id", [1], [self.account["id"], "missing"], {"account_ids": []}):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                self.service.save_account_selection(invalid)
+        self.assertEqual(self.service.account_selection(), [self.account["id"]])
+        isolated = self.make_service("selection-live", demo=False, transport=self.transport)
+        self.assertIsNone(isolated.account_selection())
+        self.service.delete_account(self.account["id"])
+        self.assertEqual(self.service.account_selection(), [])
+        payload = self.service.store.one("SELECT payload FROM preferences WHERE key='account_selection'")["payload"]
+        self.assertNotIn("MEMORY-SECRET", payload)
+
+    def test_preferences_backup_restore_and_old_backup_without_preferences(self):
+        self.service.save_account_selection([self.account["id"]])
+        backup = self.service.backup()
+        content = self.service.file(backup["export_id"], "export")[1].read_bytes()
+        target = self.make_service("preferences-restored")
+        target.restore(content)
+        self.assertEqual(target.account_selection(), [self.account["id"]])
+        target.save_account_selection([])
+        empty_backup = target.backup()
+        target.restore(target.file(empty_backup["export_id"], "export")[1].read_bytes())
+        self.assertEqual(target.account_selection(), [])
+        old_db = self.root / "old.sqlite3"
+        with zipfile.ZipFile(io.BytesIO(content)) as archive:
+            old_db.write_bytes(archive.read("yunyoubao.sqlite3"))
+        with contextlib.closing(sqlite3.connect(old_db)) as db:
+            db.execute("DROP TABLE preferences")
+            db.commit()
+        stream = io.BytesIO()
+        with zipfile.ZipFile(io.BytesIO(content)) as source, zipfile.ZipFile(stream, "w") as output:
+            for name in source.namelist():
+                output.writestr(name, old_db.read_bytes() if name == "yunyoubao.sqlite3" else source.read(name))
+        target.restore(stream.getvalue())
+        self.assertIsNone(target.account_selection())
+        self.assertEqual(target.accounts()[0]["id"], self.account["id"])
+        self.assertEqual(target.store.one("PRAGMA user_version")["user_version"], 1)
+
+    def run_with_clock(self, service, identifier, clock, on_wait=None):
+        def wait(seconds):
+            if on_wait:
+                on_wait(seconds)
+            clock[0] += seconds
+            return service.engine.stop_event.is_set()
+
+        self.assertTrue(service.engine.lock.acquire(blocking=False))
+        service.engine.task_id = identifier
+        service.engine.stop_event.clear()
+        with patch("core.engine.time.time", side_effect=lambda: clock[0]), patch.object(service.engine.stop_event, "wait", side_effect=wait):
+            service.engine._run(identifier)
+        self.assertNotIn(identifier, service.engine.runtime_errors)
+        self.assertFalse(service.engine.busy)
+        task = service.task(identifier)
+        self.assert_conserved(task["counts"])
+        return task
+
+    def live_task(self, folder, rows, outcomes=(), rates=(6, 120)):
+        transport = FakeTransport(outcomes)
+        service = self.make_service(folder, demo=False, transport=transport)
+        accounts = [self.save_account(service, email=f"sender{i}@example.com", per_minute=rate)
+                    for i, rate in enumerate(rates)]
+        config = self.config(rows, service=service, account=accounts[0])
+        config["account_ids"] = [account["id"] for account in accounts]
+        return service, transport, accounts, service.create_task(config)
+
+    def test_task_wide_uniform_rate_uses_slowest_selected_account_and_survives_restart(self):
+        service, transport, accounts, task = self.live_task("paced", [recipient(f"p{i}@example.com") for i in range(3)])
+        clock, times = [1000000.0], []
+        transport.on_send = lambda: times.append(clock[0])
+        result = self.run_with_clock(service, task["id"], clock)
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(times, [1000000, 1000010, 1000020])
+        self.assertEqual([call["sender"]["id"] for call in transport.calls], [accounts[0]["id"], accounts[1]["id"], accounts[0]["id"]])
+        reopened = self.make_service("paced", demo=False, transport=transport)
+        for account in accounts:
+            self.save_account(reopened, **{key: value for key, value in account.items() if key != "has_secret"})
+        follow_config = self.config([recipient("follow@example.com")], service=reopened, account=accounts[1])
+        follow_config["account_ids"] = [account["id"] for account in accounts]
+        follow = reopened.create_task(follow_config)
+        self.run_with_clock(reopened, follow["id"], clock)
+        self.assertEqual(times[-1], 1000030)
+        with patch("core.engine.time.time", side_effect=lambda: clock[0]):
+            self.assertEqual(sum(reopened.engine.quota(account)["count"] for account in accounts), 4)
+
+    def test_three_explicit_temporary_rejections_wait_globally_then_pause_without_rotation(self):
+        outcomes = [SendResult("failed", "4.7.0 rate limited", retryable=True, code=451)] * 3
+        service, transport, accounts, task = self.live_task("temporary", [recipient("retry@example.com"), recipient("untouched@example.com")], outcomes)
+        clock, times = [1000000.0], []
+        transport.on_send = lambda: times.append(clock[0])
+        current = self.run_with_clock(service, task["id"], clock)
+        self.assertEqual(times, [1000000, 1000030, 1000150])
+        self.assertEqual((current["status"], current["pause_reason"], current["counts"]["pending"]), ("paused", "temporary_rejection", 2))
+        self.assertEqual([call["sender"]["id"] for call in transport.calls], [accounts[0]["id"]] * 3)
+        self.assertEqual([call["recipient"]["email"] for call in transport.calls], ["retry@example.com"] * 3)
+        with patch("core.engine.time.time", side_effect=lambda: clock[0]):
+            self.assertEqual(service.engine.quota(accounts[0])["count"], 3)
+            self.assertEqual(service.engine.quota(accounts[1])["count"], 0)
+        self.assertEqual(current["recipients"][0]["attempts"], 3)
+        # An explicit start is the human resume. Real pacing uses the fake clock.
+        with patch("core.engine.time.time", side_effect=lambda: clock[0]), patch.object(
+                service.engine.stop_event, "wait", side_effect=lambda seconds: clock.__setitem__(0, clock[0] + seconds)):
+            service.engine.start(task["id"])
+            resumed = self.wait_for_task(service, task["id"])
+        self.assertEqual(resumed["status"], "completed")
+        self.assertEqual(resumed["counts"]["accepted"], 2)
+
+    def test_task_backoff_is_persisted_across_manual_pause_and_process_reopen(self):
+        service, transport, accounts, task = self.live_task("backoff", [recipient("retry@example.com"), recipient("other@example.com")],
+            [SendResult("failed", "Later", retryable=True, code=450)])
+        clock = [1000000.0]
+        current = self.run_with_clock(service, task["id"], clock, lambda seconds: service.engine.stop_event.set())
+        self.assertEqual(len(transport.calls), 1)
+        waits = service.store.all("SELECT next_attempt FROM recipients WHERE task_id=?", (task["id"],))
+        self.assertEqual([row["next_attempt"] for row in waits], [1000030, 1000030])
+        reopened = self.make_service("backoff", demo=False, transport=transport)
+        for account in accounts:
+            self.save_account(reopened, **{key: value for key, value in account.items() if key != "has_secret"})
+        times = []
+        transport.on_send = lambda: times.append(clock[0])
+        result = self.run_with_clock(reopened, task["id"], clock)
+        self.assertEqual(times, [1000030, 1000040])
+        self.assertEqual(result["counts"]["accepted"], 2)
+        self.assertEqual(current["counts"]["pending"], 2)
+
+    def test_success_resets_temporary_rejection_streak(self):
+        outcomes = [SendResult("failed", "Later", retryable=True, code=451), SendResult("accepted", "OK"),
+                    SendResult("failed", "Later again", retryable=True, code=451), SendResult("accepted", "OK")]
+        service, transport, accounts, task = self.live_task("reset", [recipient("one@example.com"), recipient("two@example.com")], outcomes)
+        clock, times = [1000000.0], []
+        transport.on_send = lambda: times.append(clock[0])
+        result = self.run_with_clock(service, task["id"], clock)
+        self.assertEqual(times, [1000000, 1000030, 1000040, 1000070])
+        self.assertEqual(result["status"], "completed")
+        with patch("core.engine.time.time", side_effect=lambda: clock[0]):
+            self.assertEqual(sum(service.engine.quota(account)["count"] for account in accounts), 4)
+
+    def test_explicit_gmail_rate_limit_pauses_for_ten_minutes_across_tasks_and_restart(self):
+        service, transport, accounts, task = self.live_task("gmail-limit", [recipient("retry@example.com")],
+            [SendResult("failed", "4.7.28 sending quota exceeded", retryable=True, code=421)])
+        clock = [1000000.0]
+        result = self.run_with_clock(service, task["id"], clock)
+        self.assertEqual((result["status"], result["pause_reason"]), ("paused", "provider_rate_limit"))
+        self.assertEqual(result["counts"]["pending"], 1)
+        self.assertEqual(service.store.one("SELECT next_attempt FROM recipients WHERE task_id=?", (task["id"],))["next_attempt"], 1000600)
+        reopened = self.make_service("gmail-limit", demo=False, transport=transport)
+        for account in accounts:
+            self.save_account(reopened, **{key: value for key, value in account.items() if key != "has_secret"})
+        with patch("core.engine.time.time", side_effect=lambda: clock[0]):
+            self.assertFalse(reopened.engine.reserve(accounts[0]))
+        follow = reopened.create_task(self.config([recipient("other@example.com")], service=reopened, account=accounts[0]))
+        waiting = self.run_with_clock(reopened, follow["id"], clock, lambda _: reopened.engine.stop_event.set())
+        self.assertEqual(len(transport.calls), 1)
+        self.assertEqual(waiting["counts"]["pending"], 1)
+        clock[0] = 1000600
+        with patch("core.engine.time.time", side_effect=lambda: clock[0]):
+            self.assertTrue(reopened.engine.reserve(accounts[0]))
+
+    def test_account_policy_rejection_pauses_without_fallback_or_losing_attempts(self):
+        service, transport, accounts, task = self.live_task("policy", [recipient("one@example.com"), recipient("two@example.com")],
+            [SendResult("failed", "Daily sending limit", retryable=True, account_error=True, code=421)])
+        result = self.run_with_clock(service, task["id"], [1000000.0])
+        self.assertEqual((result["status"], result["pause_reason"], result["counts"]["pending"]), ("paused", "account_error", 2))
+        self.assertEqual(len(transport.calls), 1)
+        self.assertEqual(result["recipients"][0]["attempts"], 1)
+        with patch("core.engine.time.time", return_value=1000000.0):
+            self.assertEqual(service.engine.quota(accounts[0])["count"], 1)
+            self.assertEqual(service.engine.quota(accounts[1])["count"], 0)
+
+    def test_unknown_submission_is_not_retried_and_demo_skips_backoff(self):
+        self.transport.outcomes.extend([SendResult("failed", "Later", retryable=True, code=451),
+                                       SendResult("uncertain", "Reply lost")])
+        task = self.create_task()
+        clock = [1000000.0]
+        result = self.run_with_clock(self.service, task["id"], clock)
+        self.assertEqual(result["counts"]["uncertain"], 1)
+        self.assertEqual(len(self.transport.calls), 2)
+        self.assertLess(clock[0] - 1000000, 1)
+
+    def test_old_frozen_legacy_variable_and_configuration_are_not_rewritten(self):
+        config = self.config([recipient("old@example.com")])
+        config.update(subject="Old <\u4eba\u540d>", html_content="<p>&lt;\u4eba\u540d&gt;</p>", add_unsubscribe=False,
+                      source_note="Historical", purpose="notification")
+        task = self.service.create_task(config)
+        frozen = copy.deepcopy(task["config"])
+        self.service.engine.start(task["id"])
+        result = self.wait_for_task(self.service, task["id"])
+        self.assertEqual(result["config"], frozen)
+        self.assertEqual(self.transport.calls[-1]["subject"], "Old <\u4eba\u540d>")
 
     def test_filter_counts_revision_and_frozen_snapshot(self):
         self.service.set_suppressions("excluded@example.com")
@@ -620,6 +925,34 @@ class ProductServiceIntegrationTests(unittest.TestCase):
             self.assertEqual(sent.status_code, 200, sent.text)
             self.assertEqual(sent.json()["status"], "accepted")
         self.assertEqual(len(self.transport.calls), 1)
+
+
+@unittest.skipUnless(os.name == "nt", "Windows DPAPI is required")
+class CredentialProcessTests(unittest.TestCase):
+    def test_dpapi_and_empty_account_selection_survive_separate_processes(self):
+        script = '''
+import sys
+from unittest.mock import patch
+from core.service import ProductService
+with patch("smtplib.SMTP", side_effect=AssertionError("SMTP forbidden")), patch("smtplib.SMTP_SSL", side_effect=AssertionError("SMTP forbidden")):
+    service = ProductService(sys.argv[1])
+    if sys.argv[2] == "write":
+        service.save_account({"email": "fixture@qq.com", "password": "DPAPI-cross-process-fixture"})
+        service.save_account_selection([])
+    else:
+        account = service.accounts()[0]
+        assert service.sender(account["id"])["password"] == "DPAPI-cross-process-fixture"
+        assert service.account_selection() == []
+        assert account["security"] == "ssl" and account["smtp_port"] == 465
+        row = service.store.one("SELECT payload,secret FROM accounts")
+        assert "DPAPI-cross-process-fixture" not in row["payload"] + row["secret"]
+        print("verified")
+'''
+        with tempfile.TemporaryDirectory() as root:
+            for mode in ("write", "read"):
+                completed = subprocess.run([sys.executable, "-c", script, root, mode], check=True,
+                    capture_output=True, text=True, timeout=20, cwd=Path(__file__).resolve().parents[1])
+            self.assertEqual(completed.stdout.strip(), "verified")
 
 
 if __name__ == "__main__":

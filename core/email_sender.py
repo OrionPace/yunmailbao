@@ -23,6 +23,12 @@ from urllib.parse import quote, urlsplit
 
 MAX_INLINE_IMAGE_BYTES = 5 * 1024 * 1024
 MAX_MESSAGE_BYTES = 25 * 1024 * 1024
+ATTACHMENT_SUBTYPES = {
+    ".pdf": "pdf",
+    ".docx": "vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".xlsx": "vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ".pptx": "vnd.openxmlformats-officedocument.presentationml.presentation",
+}
 _NAME = "\u4eba\u540d"
 _NAME_COLUMN = "\u59d3\u540d"
 _VARIABLE = re.compile(r"\{\{\s*([^{}]+?)\s*\}\}|<" + _NAME + r">|&lt;" + _NAME + r"&gt;")
@@ -294,12 +300,13 @@ class EmailSenderCore:
         return re.fullmatch(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", str(email_str).strip()) is not None
 
     def create_email_msg(self, sender, recipient, email_index, html_content, subject,
-                         image_path=None, attachment_path=None, add_unsubscribe=False):
+                         image_path=None, attachment_path=None, add_unsubscribe=False, attachment_filename=None):
         return self._create_message(sender, recipient, html_content, subject,
-                                    attachment_path, add_unsubscribe, image_path=image_path)
+                                    attachment_path, add_unsubscribe, image_path=image_path,
+                                    attachment_filename=attachment_filename)
 
     def _create_message(self, sender, recipient, html_content, subject,
-                        attachment_path, add_unsubscribe, message_id=None, image_path=None):
+                        attachment_path, add_unsubscribe, message_id=None, image_path=None, attachment_filename=None):
         rendered = render_email(subject, html_content, recipient, sender, add_unsubscribe)
         from_address, to_address = _address(sender["email"]), _address(recipient["email"])
         msg = MIMEMultipart("mixed")
@@ -345,8 +352,11 @@ class EmailSenderCore:
                 data = stream.read(MAX_MESSAGE_BYTES + 1)
             if len(data) > MAX_MESSAGE_BYTES:
                 raise ValueError("Attachment exceeds the total size limit")
-            attachment = MIMEApplication(data)
-            filename = _header(os.path.basename(attachment_path))
+            filename = _header(attachment_filename if attachment_filename is not None else os.path.basename(attachment_path))
+            if not filename or filename != os.path.basename(filename) or "/" in filename or "\\" in filename:
+                raise ValueError("Invalid attachment filename")
+            subtype = ATTACHMENT_SUBTYPES.get(os.path.splitext(filename)[1].lower(), "octet-stream")
+            attachment = MIMEApplication(data, _subtype=subtype)
             attachment.add_header("Content-Disposition", "attachment", filename=("utf-8", "", filename))
             msg.attach(attachment)
         if len(msg.as_bytes(policy=policy.SMTP)) > MAX_MESSAGE_BYTES:
@@ -428,17 +438,17 @@ class EmailSenderCore:
                           account_error=account_error, code=code, permanent_address=permanent)
 
     def send_attempt(self, sender, recipient, html_content, subject, attachment_path=None,
-                     add_unsubscribe=True, message_id=None) -> SendResult:
+                     add_unsubscribe=True, message_id=None, attachment_filename=None) -> SendResult:
         return self._send_attempt(sender, recipient, html_content, subject, attachment_path,
-                                  add_unsubscribe, message_id)
+                                  add_unsubscribe, message_id, attachment_filename=attachment_filename)
 
     def _send_attempt(self, sender, recipient, html_content, subject, attachment_path,
-                      add_unsubscribe, message_id=None, image_path=None):
+                      add_unsubscribe, message_id=None, image_path=None, attachment_filename=None):
         stage = "prepare"
         key = None
         try:
             msg = self._create_message(sender, recipient, html_content, subject, attachment_path,
-                                       add_unsubscribe, message_id, image_path)
+                                       add_unsubscribe, message_id, image_path, attachment_filename)
             payload = msg.as_bytes(policy=policy.SMTP)
             key = self._connection_key(sender)
             stage = "connect"
@@ -482,7 +492,7 @@ class EmailSenderCore:
             return SendResult("failed", f"Message not submitted: {exc}")
 
     def send_single(self, sender, recipient, email_index, html_content, subject,
-                    image_path=None, attachment_path=None, add_unsubscribe=False):
+                    image_path=None, attachment_path=None, add_unsubscribe=False, attachment_filename=None):
         result = self._send_attempt(sender, recipient, html_content, subject, attachment_path,
-                                    add_unsubscribe, image_path=image_path)
+                                    add_unsubscribe, image_path=image_path, attachment_filename=attachment_filename)
         return ("success" if result.status == "accepted" else result.status), result.detail

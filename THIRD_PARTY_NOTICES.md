@@ -194,6 +194,37 @@ SHA-512 integrity fields, then the actual assets and originals were compared:
 
 No frontend vendor asset or original notice was modified by this audit.
 
+## Font Notices
+
+Source Han Sans CN variable font is Copyright 2014-2025 Adobe, with Reserved
+Font Name 'Source'. It is licensed under the SIL Open Font License 1.1, not the
+application's GPL. The full upstream copyright and OFL text is preserved
+byte-for-byte in [SourceHanSans-LICENSE.txt](static/fonts/SourceHanSans-LICENSE.txt).
+Redistribution must retain that text with the font.
+
+Only the following asset and the same-tag LICENSE.txt were downloaded from
+the official adobe-fonts/source-han-sans Git tag 2.005R via GitHub CLI. No full
+font archive, FontTools dependency, subsetting or font modification was used.
+
+| Local original | Official 2.005R source | Bytes | SHA-256 |
+| --- | --- | --- | --- |
+| [SourceHanSansCN-VF.ttf.woff2](static/fonts/SourceHanSansCN-VF.ttf.woff2) | [Variable/WOFF2/TTF/Subset/SourceHanSansCN-VF.ttf.woff2](https://github.com/adobe-fonts/source-han-sans/blob/2.005R/Variable/WOFF2/TTF/Subset/SourceHanSansCN-VF.ttf.woff2) | 7711988 | `f971e3bff46f76b49e1d5510556c2297c618ec4b491a295a4e741cdd38257799` |
+| [SourceHanSans-LICENSE.txt](static/fonts/SourceHanSans-LICENSE.txt) | [LICENSE.txt](https://github.com/adobe-fonts/source-han-sans/blob/2.005R/LICENSE.txt) | 4463 | `fcac737e761ec63dbfbdce11030a1780161920d80315edba9c8beff1c2bac5a2` |
+
+On 2026-10-12 the local files' Git blob hashes were compared with the official
+API objects: font `052b1aa5f1479c4aadbf40a6244aaffe5ba4c7c3` and license
+`3ff0ccaba06857bf292ade9a50f16a0f02b3b8d4`. Sizes and SHA-256 were calculated
+from the downloaded bytes; the font header is `wOF2`. These checks establish
+resource provenance only, not successful rendering or installer inclusion.
+The originals live in static/fonts, separately from the historical 102-text
+packaging/licenses inventory. Their inclusion and unchanged bytes must be
+verified in the new candidate and installed application.
+
+The native-binary numbers and release/0.2.0 paths below remain historical
+0.2.0 audit evidence. They do not certify the 0.3.0 candidate. All existing
+unresolved evidence listed in this notice remains unresolved; adding an
+OFL-licensed font does not grant public-release clearance.
+
 ## Candidate Native Binary Evidence
 
 Paths here are relative to the candidate's _internal directory. Build metadata

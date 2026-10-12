@@ -10,6 +10,7 @@ import tempfile
 import threading
 import uuid
 import zipfile
+from xml.etree import ElementTree as ET
 from functools import wraps
 from collections import Counter, defaultdict
 from pathlib import Path, PureWindowsPath
@@ -57,6 +58,61 @@ def mail_subject(config):
     return subject
 
 
+def mail_unsubscribe(config):
+    return config.get("purpose") == "promotion" or bool(config.get("add_unsubscribe", True))
+
+
+def validate_office(content, suffix):
+    parts = {
+        ".docx": ("word/document.xml", "wordprocessingml.document", "document"),
+        ".xlsx": ("xl/workbook.xml", "spreadsheetml.sheet", "workbook"),
+        ".pptx": ("ppt/presentation.xml", "presentationml.presentation", "presentation"),
+    }
+    main, category, root = parts[suffix]
+    expected_type = "application/vnd.openxmlformats-officedocument." + category + ".main+xml"
+
+    def read_xml(archive, name):
+        data = archive.read(name)
+        if b"<!DOCTYPE" in data.upper() or b"<!ENTITY" in data.upper():
+            raise ValueError("Office XML entity declarations are not supported")
+        return ET.fromstring(data)
+
+    try:
+        with zipfile.ZipFile(io.BytesIO(content)) as archive:
+            entries = archive.infolist()
+            names = [entry.filename for entry in entries]
+            if len(entries) > 10000 or sum(entry.file_size for entry in entries) > MAX_EXPANDED:
+                raise ValueError("Office document exceeds the 100 MiB expanded limit")
+            if len(set(names)) != len(names) or any(
+                    "\\" in name or name.startswith("/") or ".." in name.split("/")
+                    or PureWindowsPath(name).is_absolute() for name in names):
+                raise ValueError("Invalid Office document paths")
+            if any(name.rsplit("/", 1)[-1].lower() == "vbaproject.bin" for name in names):
+                raise ValueError("Office macros are not supported")
+            types = read_xml(archive, "[Content_Types].xml")
+            relationships = read_xml(archive, "_rels/.rels")
+            if types.tag != "{http://schemas.openxmlformats.org/package/2006/content-types}Types":
+                raise ValueError("Invalid Office content types")
+            if any("macro" in node.get("ContentType", "").lower()
+                   or "vba" in node.get("ContentType", "").lower() for node in types):
+                raise ValueError("Office macros are not supported")
+            if not any(node.tag == "{http://schemas.openxmlformats.org/package/2006/content-types}Override" and node.get("PartName") == "/" + main
+                       and node.get("ContentType") == expected_type for node in types):
+                raise ValueError("Office document type does not match its extension")
+            if relationships.tag != "{http://schemas.openxmlformats.org/package/2006/relationships}Relationships" or not any(
+                    node.get("Type") == "http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument"
+                    and node.get("Target") in {main, "/" + main}
+                    and node.get("TargetMode", "Internal") == "Internal" for node in relationships):
+                raise ValueError("Invalid Office document relationship")
+            document = read_xml(archive, main)
+            namespace = "http://schemas.openxmlformats.org/" + {
+                ".docx": "wordprocessingml", ".xlsx": "spreadsheetml", ".pptx": "presentationml"}[suffix] + "/2006/main"
+            if document.tag != "{" + namespace + "}" + root or archive.testzip() is not None:
+                raise ValueError("Invalid Office document structure")
+    except (zipfile.BadZipFile, KeyError, ET.ParseError, RuntimeError, NotImplementedError, OSError) as error:
+        raise ValueError("Invalid Office OOXML document") from error
+
+
 def idle_operation(function):
     @wraps(function)
     def guarded(self, *args, **kwargs):
@@ -100,6 +156,25 @@ class ProductService:
             result.append(item)
         return result
 
+    def account_selection(self):
+        row = self.store.one("SELECT payload FROM preferences WHERE key='account_selection'")
+        if row is None:
+            return None
+        valid = {account["id"] for account in self.accounts()}
+        return [identifier for identifier in json.loads(row["payload"]) if identifier in valid]
+
+    @idle_operation
+    def save_account_selection(self, ids):
+        if not isinstance(ids, list) or any(not isinstance(identifier, str) for identifier in ids):
+            raise ValueError("Account selection must be a list of account IDs")
+        ids = list(dict.fromkeys(ids))
+        valid = {account["id"] for account in self.accounts()}
+        if not set(ids).issubset(valid):
+            raise ValueError("Selected account does not exist")
+        self.store.execute("INSERT INTO preferences VALUES('account_selection',?) ON CONFLICT(key) "
+                           "DO UPDATE SET payload=excluded.payload", (encode(ids),))
+        return ids
+
     @idle_operation
     def save_account(self, data):
         self.require_idle()
@@ -118,7 +193,7 @@ class ProductService:
         host = clean(data.get("smtp_host")) or {"qq.com": "smtp.qq.com", "163.com": "smtp.163.com"}.get(domain, "")
         if not re.fullmatch(r"[a-zA-Z0-9.-]+", host) or ".." in host:
             raise ValueError("请填写有效的 SMTP 主机。")
-        security = data.get("security", "starttls" if domain == "qq.com" else "ssl")
+        security = data.get("security", "ssl")
         if security not in {"ssl", "starttls"}:
             raise ValueError("SMTP 必须使用 SSL 或 STARTTLS。")
         port = int(data.get("smtp_port") or (465 if security == "ssl" else 587))
@@ -186,18 +261,13 @@ class ProductService:
         if not content or len(content) > maximum:
             raise ValueError(f"请选择非空文件，最大 {maximum // (1024 * 1024)} MiB。")
         suffix = Path(filename).suffix.lower()
-        allowed = {"import": {".xlsx", ".csv"}, "attachment": {".pdf"}, "export": {".xlsx", ".zip"}}
+        allowed = {"import": {".xlsx", ".csv"}, "attachment": {".pdf", ".docx", ".xlsx", ".pptx"}, "export": {".xlsx", ".zip"}}
         if suffix not in allowed[kind]:
             raise ValueError("不支持该文件格式。")
         if suffix == ".pdf" and not content.startswith(b"%PDF-"):
             raise ValueError("附件不是有效的 PDF 文件。")
-        if suffix == ".xlsx":
-            try:
-                with zipfile.ZipFile(io.BytesIO(content)) as archive:
-                    if len(archive.infolist()) > 10000 or sum(item.file_size for item in archive.infolist()) > MAX_EXPANDED:
-                        raise ValueError("工作簿展开后过大。")
-            except zipfile.BadZipFile:
-                raise ValueError("文件不是有效的 xlsx 工作簿。") from None
+        if suffix in {".docx", ".xlsx", ".pptx"}:
+            validate_office(content, suffix)
         identifier = uid()
         relative = Path("exports" if kind == "export" else "files") / (identifier + ("-" + filename if kind == "export" else suffix))
         (self.root / relative.parent).mkdir(exist_ok=True)
@@ -363,12 +433,11 @@ class ProductService:
         sender = next((account for account in self.accounts() if account["id"] == config.get("account_id")),
                       {"email": "sender@example.com", "name": "示例发件人"})
         result = render_email(mail_subject(config), config.get("html_content", ""), recipients[index], sender,
-                              bool(config.get("add_unsubscribe", True)))
+                              mail_unsubscribe(config))
         item, _ = self.attachment(config.get("attachment_id"))
         return dict(result, recipient=recipients[index], attachment_name=item["filename"] if item else "")
 
     def create_task(self, config):
-        from .email_sender import render_email
         result = self.precheck(config["import_id"], config)
         if result["revision"] != config.get("revision"):
             raise ValueError("名单核对已过期，请重新核对筛选与排除名单。")
@@ -393,9 +462,6 @@ class ProductService:
         purpose = config.get("purpose", "notification")
         if purpose not in {"notification", "promotion"}:
             raise ValueError("请选择邮件用途。")
-        if purpose == "promotion":
-            if not clean(config.get("source_note")):
-                raise ValueError("商业推广请填写名单来源与可联系依据。")
         start, end = config.get("start_time", "08:00"), config.get("end_time", "21:40")
         for value in (start, end):
             dt.datetime.strptime(value, "%H:%M")
@@ -406,15 +472,16 @@ class ProductService:
                   "subject": subject, "html_content": body, "attachment_id": config.get("attachment_id"),
                   "attachment_digest": item["digest"] if item else "", "attachment_name": item["filename"] if item else "",
                   "account_ids": identifiers, "sender_profiles": profiles, "start_time": start, "end_time": end,
-                  "add_unsubscribe": bool(config.get("add_unsubscribe", True)), "purpose": purpose,
+                  "add_unsubscribe": mail_unsubscribe(config), "purpose": purpose,
                   "source_note": clean(config.get("source_note"))}
         for recipient in recipients:
             try:
-                render_email(subject, body, recipient, profiles[0], frozen["add_unsubscribe"])
+                EmailSenderCore().create_email_msg(profiles[0], recipient, 1, body, subject,
+                    attachment_path=str(attachment_path) if attachment_path else None,
+                    attachment_filename=item["filename"] if item else None,
+                    add_unsubscribe=frozen["add_unsubscribe"])
             except ValueError as error:
                 raise ValueError(f"表格第 {recipient['row_number']} 行：{error}") from None
-        EmailSenderCore().create_email_msg(profiles[0], recipients[0], 1, body, subject,
-            attachment_path=str(attachment_path) if attachment_path else None, add_unsubscribe=frozen["add_unsubscribe"])
         identifier, now = uid(), timestamp()
         with self.store.transaction() as db:
             db.execute("INSERT INTO tasks(id,title,status,config,created_at,updated_at) VALUES(?,?,?,?,?,?)",
@@ -551,9 +618,12 @@ class ProductService:
                     for table in tables:
                         expected = [row[1] for row in template.execute(f"PRAGMA table_info({table})")]
                         actual = [row[1] for row in source.execute(f"PRAGMA table_info({table})")]
+                        if table == "preferences" and not actual:
+                            continue
                         if expected != actual:
                             raise ValueError("备份数据库结构不受支持。")
-                records = {table: [dict(row) for row in source.execute(f"SELECT * FROM {table}")] for table in tables}
+                records = {table: [dict(row) for row in source.execute(f"SELECT * FROM {table}")]
+                           if source.execute(f"PRAGMA table_info({table})").fetchone() else [] for table in tables}
                 for item in records["files"]:
                     if item["kind"] == "export":
                         continue
@@ -594,7 +664,7 @@ class ProductService:
         return {"status": "success", "message": "数据已恢复；原数据已自动备份，授权码请重新填写。"}
 
     def data_info(self):
-        return {"path": str(self.root), "size": sum(path.stat().st_size for path in self.root.rglob("*") if path.is_file()), "version": "0.2.0"}
+        return {"path": str(self.root), "size": sum(path.stat().st_size for path in self.root.rglob("*") if path.is_file())}
 
     @idle_operation
     def cleanup(self, data):

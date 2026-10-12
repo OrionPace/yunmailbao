@@ -143,6 +143,10 @@ async function run() {
                     smtp: 'simulated only', exported: download.suggestedFilename()};
     fs.writeFileSync(path.join(output, 'report.json'), JSON.stringify(report, null, 2));
     console.log(JSON.stringify(report));
+  } catch (error) {
+    await page.screenshot({path: path.join(output, 'failure.png'), fullPage: true}).catch(() => {});
+    console.error(await page.locator('#review-list, #connection, #toast, dialog[open]').allTextContents());
+    throw error;
   } finally {
     await context.close();
     await browser.close();

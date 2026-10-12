@@ -1,5 +1,6 @@
 import datetime as dt
 import json
+import re
 import threading
 import time
 
@@ -126,6 +127,9 @@ class TaskEngine:
         from .service import email_key
         key, today, now = email_key(profile["email"]), dt.date.today().isoformat(), time.time()
         with self.store.transaction() as db:
+            paused = db.execute("SELECT payload FROM preferences WHERE key=?", ("smtp_pause_until:" + key,)).fetchone()
+            if not self.service.demo and paused and float(json.loads(paused["payload"])) > now:
+                return False
             row = db.execute("SELECT count,last_attempt FROM quotas WHERE account_key=? AND day=?", (key, today)).fetchone()
             if row and row["count"] >= profile["daily_limit"]:
                 return False
@@ -143,7 +147,9 @@ class TaskEngine:
             config = self.service.task(identifier)["config"]
             self.store.set_status(identifier, "running")
             self.store.log(identifier, "演示任务开始，所有发送均为模拟。" if self.service.demo else "开始处理冻结名单。")
-            disabled, cursor, waiting = set(), 0, False
+            cursor, waiting, temporary_refusals = 0, False, 0
+            retry_profile = None
+            interval = 0 if self.service.demo else 60 / min(profile["per_minute"] for profile in config["sender_profiles"])
             while not self.stop_event.is_set():
                 pending = self.store.all("SELECT * FROM recipients WHERE task_id=? AND status='pending' ORDER BY position", (identifier,))
                 if not pending:
@@ -162,20 +168,29 @@ class TaskEngine:
                     self.store.set_status(identifier, "running")
                     waiting = False
                 now = time.time()
-                recipient = next((row for row in pending if row["next_attempt"] <= now), None)
-                if recipient is None:
-                    self.stop_event.wait(min(1, max(0.01, min(row["next_attempt"] for row in pending) - now)))
+                # All pending rows share the persisted task-wide cooldown; account quotas
+                # also preserve normal pacing across an interruption or another task.
+                deadline = max(row["next_attempt"] for row in pending)
+                if interval:
+                    keys = [profile["email"] for profile in config["sender_profiles"]]
+                    from .service import email_key
+                    last = self.store.one("SELECT MAX(last_attempt) AS last FROM quotas WHERE account_key IN ("
+                                          + ",".join("?" for _ in keys) + ")", tuple(email_key(key) for key in keys))["last"]
+                    deadline = max(deadline, (last or 0) + interval)
+                    for key in keys:
+                        paused = self.store.one("SELECT payload FROM preferences WHERE key=?", ("smtp_pause_until:" + email_key(key),))
+                        if paused:
+                            deadline = max(deadline, float(json.loads(paused["payload"])))
+                if deadline > now:
+                    self.stop_event.wait(min(1, max(0.01, deadline - now)))
                     continue
+                recipient = pending[0]
                 if self.store.one("SELECT email_key FROM suppressions WHERE email_key=?", (recipient["email_key"],)):
                     self.store.execute("UPDATE recipients SET status='failed',detail=? WHERE id=?",
                                        ("已排除：发送前命中退订／排除名单。", recipient["id"]))
                     self.store.log(identifier, f"第 {recipient['position'] + 1} 位已按排除名单停止发送。")
                     continue
-                eligible = [profile for profile in config["sender_profiles"] if profile["id"] not in disabled]
-                if not eligible:
-                    terminal_state = ("paused", "account_error")
-                    self.store.log(identifier, "所有选定账号不可用，请处理账号后继续。")
-                    return
+                eligible = [retry_profile] if retry_profile else config["sender_profiles"]
                 available = [profile for profile in eligible if self.quota(profile)["count"] < profile["daily_limit"]]
                 if not available:
                     terminal_state = ("paused", "quota")
@@ -186,40 +201,71 @@ class TaskEngine:
                     profile = available[(cursor + offset) % len(available)]
                     if self.reserve(profile):
                         chosen = profile
-                        cursor += 1
                         break
                 if chosen is None:
                     self.stop_event.wait(0.25)
                     continue
-                _, attachment = self.service.attachment(config.get("attachment_id"))
-                self.store.execute("UPDATE recipients SET status='sending',attempts=attempts+1 WHERE id=?", (recipient["id"],))
+                item, attachment = self.service.attachment(config.get("attachment_id"))
+                with self.store.transaction() as db:
+                    db.execute("UPDATE recipients SET next_attempt=MAX(next_attempt,?) WHERE task_id=? AND status='pending'",
+                               (time.time() + interval, identifier))
+                    db.execute("UPDATE recipients SET status='sending',attempts=attempts+1 WHERE id=?", (recipient["id"],))
                 sender = self.service.sender(chosen["id"], chosen)
                 prior = self.store.one("SELECT COUNT(*) AS n FROM attempts WHERE recipient_id=?", (recipient["id"],))["n"]
                 result = transport.send_attempt(sender=sender, recipient=dict(recipient, values=json.loads(recipient["row_values"]), demo_retry=bool(prior)),
                     html_content=config["html_content"], subject=config["subject"], attachment_path=str(attachment) if attachment else None,
+                    attachment_filename=(config.get("attachment_name") or item["filename"]) if item else None,
                     add_unsubscribe=config["add_unsubscribe"], message_id=recipient["message_id"])
                 attempts = recipient["attempts"] + 1
+                temporary = (result.status == "failed" and result.retryable and not result.account_error
+                             and result.code is not None and 400 <= result.code < 500)
+                provider_limit = (result.status == "failed" and result.code is not None and 400 <= result.code < 500
+                                  and re.search(r"\b4\.7\.28\b", result.detail) is not None)
+                if result.status == "accepted":
+                    temporary_refusals = 0
+                elif temporary:
+                    temporary_refusals += 1
                 retryable = result.status == "failed" and result.retryable and not result.account_error and attempts < 3
-                state = "pending" if retryable else result.status
+                state = "pending" if provider_limit or temporary or retryable or (result.status == "failed" and result.account_error) else result.status
                 if state not in {"pending", "accepted", "failed", "uncertain"}:
                     raise ValueError("发送后端返回了未知状态。")
-                delay = (30 if attempts == 1 else 120) if retryable and not self.service.demo else 0
+                streak = temporary_refusals if temporary else attempts
+                delay = (30 if streak == 1 else 120) if (temporary or retryable) and not self.service.demo else 0
+                if temporary and temporary_refusals >= 3:
+                    delay = 0
+                if provider_limit and not self.service.demo:
+                    delay = 600
                 detail = result.detail[:500].replace(sender["password"], "[已隐藏]") if sender.get("password") else result.detail[:500]
                 with self.store.transaction() as db:
                     db.execute("UPDATE recipients SET status=?,detail=?,next_attempt=? WHERE id=?",
-                               (state, detail, time.time() + delay, recipient["id"]))
+                               (state, detail, time.time() + max(delay, interval), recipient["id"]))
+                    db.execute("UPDATE recipients SET next_attempt=MAX(next_attempt,?) WHERE task_id=? AND status='pending'",
+                               (time.time() + max(delay, interval), identifier))
                     db.execute("INSERT INTO attempts(recipient_id,status,detail,code,created_at) VALUES(?,?,?,?,?)",
                                (recipient["id"], result.status, detail, result.code, timestamp()))
                     db.execute("UPDATE tasks SET updated_at=? WHERE id=?", (timestamp(), identifier))
                     if result.permanent_address:
                         db.execute("INSERT OR IGNORE INTO suppressions VALUES(?,?)", (recipient["email_key"], recipient["email"]))
+                    if provider_limit and not self.service.demo:
+                        db.execute("INSERT INTO preferences VALUES(?,?) ON CONFLICT(key) DO UPDATE SET payload=excluded.payload",
+                                   ("smtp_pause_until:" + email_key(chosen["email"]), json.dumps(time.time() + 600)))
+                if provider_limit:
+                    terminal_state = ("paused", "provider_rate_limit")
+                    self.store.log(identifier, "服务商返回 4.7.28，任务已暂停；至少等待 10 分钟并排查原因后人工继续。")
+                    return
                 if result.account_error:
-                    disabled.add(chosen["id"])
-                    self.store.execute("UPDATE recipients SET status='pending',attempts=0 WHERE id=?", (recipient["id"],))
-                    self.store.log(identifier, "一个账号认证或策略拒绝，已停用该账号并保留未接受对象。")
-                else:
-                    labels = {"accepted": "服务器已接收", "failed": "失败", "uncertain": "待确认", "pending": "暂时拒绝，等待重试"}
-                    self.store.log(identifier, f"第 {recipient['position'] + 1} 位：{labels[state]}。")
+                    terminal_state = ("paused", "account_error")
+                    self.store.log(identifier, "账号认证或策略拒绝，整个任务已暂停，请处理后人工继续。")
+                    return
+                if temporary and temporary_refusals >= 3:
+                    terminal_state = ("paused", "temporary_rejection")
+                    self.store.log(identifier, "连续三次临时拒绝，整个任务已暂停，请核对后人工继续。")
+                    return
+                retry_profile = chosen if state == "pending" else None
+                if retry_profile is None:
+                    cursor += 1
+                labels = {"accepted": "服务器已接收", "failed": "失败", "uncertain": "待确认", "pending": "暂时拒绝，等待重试"}
+                self.store.log(identifier, f"第 {recipient['position'] + 1} 位：{labels[state]}。")
                 if self.service.demo:
                     self.stop_event.wait(0.25)
             terminal_state = ("paused", "manual")
@@ -250,8 +296,7 @@ class TaskEngine:
             self.lock.release()
 
     def test_send(self, config):
-        from .email_sender import render_email
-        from .service import mail_subject
+        from .service import mail_subject, mail_unsubscribe
         if not self.lock.acquire(blocking=False):
             raise ValueError("任务正在运行或停止中，暂不能测试发送。")
         transport = None
@@ -263,14 +308,17 @@ class TaskEngine:
             recipient = {"name": config.get("test_name") or "测试用户", "email": email, "values": config.get("values", {})}
             subject = mail_subject(config)
             subject = "AD 【测试】" + subject[3:] if subject.startswith("AD ") else "【测试】" + subject
-            render_email(subject, config.get("html_content", ""), recipient, sender, config.get("add_unsubscribe", True))
-            _, path = self.service.attachment(config.get("attachment_id"))
+            item, path = self.service.attachment(config.get("attachment_id"))
+            add_unsubscribe = mail_unsubscribe(config)
+            EmailSenderCore().create_email_msg(sender, recipient, 1, config.get("html_content", ""), subject,
+                attachment_path=str(path) if path else None, attachment_filename=item["filename"] if item else None,
+                add_unsubscribe=add_unsubscribe)
             if not self.reserve(sender):
                 raise ValueError("此账号已达到发送预算或间隔，请稍后重试。")
             transport = self.transport_factory()
             result = transport.send_attempt(sender=sender, recipient=recipient, subject=subject,
                 html_content=config.get("html_content", ""), attachment_path=str(path) if path else None,
-                add_unsubscribe=config.get("add_unsubscribe", True))
+                attachment_filename=item["filename"] if item else None, add_unsubscribe=add_unsubscribe)
             detail = result.detail.replace(sender["password"], "[已隐藏]") if sender.get("password") else result.detail
             return {"status": result.status, "detail": detail, "retryable": result.retryable, "account_error": result.account_error,
                     "code": result.code, "permanent_address": result.permanent_address}
