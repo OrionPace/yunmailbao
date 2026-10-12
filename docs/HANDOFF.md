@@ -107,3 +107,7 @@ node tests/browser/installed.cjs .build/candidate/YunYouBao/YunYouBao.exe releas
 - git add 明确列文件，不用 -A；不 reset、不 force push。编辑用 apply_patch；GitHub 优先 gh。
 - .runtime/、tests/artifacts/、.build/、release/ 为忽略本地产物；不提交 .env、名单或库。
 - 不依赖旧 subagent/session ID，从本文、Git 和实际文件核对。
+
+## Git 接续记录
+
+源码与本机验收提交 `f05706d30b755e84b3857935d725d1ae31b9f1b8` 已推送到 origin/master。对应 [Windows Checks](https://github.com/OrionPace/yunmailbao/actions/runs/38213212578) 验证本轮应用代码，而非旧版；最终状态可用 `gh run view 38213212578 --repo OrionPace/yunmailbao` 查询。本文后续收尾提交只更新文档，不改变已构建应用；不以 CI 构建替代干净机器安装或许可审查。未发布 tag/Release。
